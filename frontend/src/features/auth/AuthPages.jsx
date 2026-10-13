@@ -10,6 +10,7 @@ import {
   Sparkles,
 } from "lucide-react"
 import { Button, Input } from "../../components/ui"
+import { useStore } from "../../store/AppStore"
 
 function AuthLayout({ children, title, subtitle }) {
   return (
@@ -35,19 +36,18 @@ function AuthLayout({ children, title, subtitle }) {
         <div className="absolute -right-24 -top-24 size-96 rounded-full bg-violet-600/30 blur-3xl" />
         <div className="relative">
           <span className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-bold">
-            <Sparkles size={14} /> Votre espace personnel intelligent
+            <Sparkles size={14} /> Your personal AI workspace
           </span>
         </div>
         <div className="relative max-w-xl">
           <blockquote className="text-4xl font-semibold leading-tight">
-            « Vos journées deviennent des souvenirs. MindLog vous aide à en
-            prendre soin. »
+            "Your days become memories. MindLog helps you take care of them."
           </blockquote>
           <div className="mt-8 grid grid-cols-3 gap-3">
             {[
-              "Privé par conception",
-              "Pensé pour vous",
-              "Toujours accessible",
+              "Private by design",
+              "Built for you",
+              "Always accessible",
             ].map((x) => (
               <div
                 key={x}
@@ -60,58 +60,78 @@ function AuthLayout({ children, title, subtitle }) {
           </div>
         </div>
         <p className="relative text-sm text-slate-400">
-          Votre vie, vos souvenirs, votre histoire.
+          Your life, your memories, your story.
         </p>
       </div>
     </div>
   )
 }
+
 export function Login() {
   const [form, setForm] = useState({
-      email: "demo@mindlog.ai",
-      password: "demo1234",
-    }),
-    [show, setShow] = useState(false),
-    [error, setError] = useState(""),
-    [loading, setLoading] = useState(false)
+    usernameOrEmail: "",
+    password: "",
+  })
+  const [show, setShow] = useState(false)
+  const [error, setError] = useState("")
+  const [loading, setLoading] = useState(false)
   const nav = useNavigate()
-  const submit = (e) => {
+  const { login } = useStore()
+
+  const submit = async (e) => {
     e.preventDefault()
     setError("")
-    if (!form.email.includes("@") || form.password.length < 6) {
-      setError("Vérifiez votre email et votre mot de passe.")
+
+    if (!form.usernameOrEmail.trim() || !form.password) {
+      setError("Please enter your email/username and password.")
       return
     }
+
     setLoading(true)
-    setTimeout(() => {
-      localStorage.setItem("mindlog_auth", "demo")
-      nav("/dashboard")
-    }, 700)
+    try {
+      const response = await login(form.usernameOrEmail, form.password)
+      // Redirect based on user role from the login response
+      const userRole = response.user?.role
+      if (userRole === "admin") {
+        nav("/admin/dashboard")
+      } else {
+        nav("/dashboard")
+      }
+    } catch (err) {
+      setError(err.message || "Login failed. Please try again.")
+    } finally {
+      setLoading(false)
+    }
   }
+
   return (
     <AuthLayout
-      title="Bon retour parmi nous"
-      subtitle="Connectez-vous pour retrouver votre journal personnel."
+      title="Welcome back"
+      subtitle="Log in to access your personal journal."
     >
       <form onSubmit={submit} className="space-y-4">
         <Input
-          label="Adresse email"
-          type="email"
-          value={form.email}
-          onChange={(e) => setForm({ ...form, email: e.target.value })}
+          label="Email or username"
+          type="text"
+          value={form.usernameOrEmail}
+          onChange={(e) =>
+            setForm({ ...form, usernameOrEmail: e.target.value })
+          }
+          disabled={loading}
         />
         <div className="relative">
           <Input
-            label="Mot de passe"
+            label="Password"
             type={show ? "text" : "password"}
             value={form.password}
             onChange={(e) => setForm({ ...form, password: e.target.value })}
+            disabled={loading}
           />
           <button
             type="button"
             onClick={() => setShow(!show)}
             className="absolute right-3 top-10 text-slate-400"
-            aria-label="Afficher le mot de passe"
+            aria-label="Show password"
           >
             {show ? <EyeOff size={18} /> : <Eye size={18} />}
           </button>
@@ -122,11 +142,12 @@ export function Login() {
               type="checkbox"
               defaultChecked
               className="accent-violet-600"
-            />{" "}
-            Se souvenir de moi
+              disabled={loading}
+            />
+            Remember me
           </label>
           <Link className="font-bold text-violet-600" to="/forgot-password">
-            Mot de passe oublié ?
+            Forgot password?
           </Link>
         </div>
         {error && (
@@ -135,101 +156,285 @@ export function Login() {
           </p>
         )}
         <Button className="w-full" disabled={loading}>
-          {loading ? "Connexion..." : "Se connecter"}
+          {loading ? "Signing in..." : "Sign in"}
           <ArrowRight size={17} />
         </Button>
       </form>
-      <div className="mt-5 rounded-xl bg-slate-50 p-3 text-xs text-slate-500">
-        <b>Accès démo :</b> demo@mindlog.ai · demo1234 — authentification
-        simulée.
-      </div>
       <p className="mt-6 text-center text-sm text-slate-500">
-        Pas encore de compte ?{" "}
+        Don't have an account?{" "}
         <Link className="font-bold text-violet-600" to="/register">
-          Créer un compte
+          Create one
         </Link>
       </p>
     </AuthLayout>
   )
 }
-export function Register() {
-  const [show, setShow] = useState(false),
-    [error, setError] = useState(""),
-    [form, setForm] = useState({
-      first: "",
-      last: "",
-      username: "",
-      email: "",
-      password: "",
-      confirm: "",
-      terms: false,
-    })
+
+/**
+ * AdminLogin - Real admin authentication using Django JWT backend
+ * Only admins (role === "admin") can access the admin dashboard
+ */
+export function AdminLogin() {
+  const [form, setForm] = useState({
+    usernameOrEmail: "",
+    password: "",
+  })
+  const [show, setShow] = useState(false)
+  const [error, setError] = useState("")
+  const [loading, setLoading] = useState(false)
   const nav = useNavigate()
-  const set = (k, v) => setForm({ ...form, [k]: v })
-  const submit = (e) => {
+  const { login } = useStore()
+
+  const submit = async (e) => {
     e.preventDefault()
-    if (
-      !form.first ||
-      !form.email ||
-      form.password.length < 8 ||
-      form.password !== form.confirm ||
-      !form.terms
-    ) {
+    setError("")
+
+    if (!form.usernameOrEmail.trim() || !form.password) {
+      setError("Please enter your email and password.")
+      return
+    }
+
+    setLoading(true)
+    try {
+      const response = await login(form.usernameOrEmail, form.password)
+      const userRole = response.user?.role
+
+      // Only admins can login via admin panel
+      if (userRole === "admin") {
+        nav("/admin/dashboard")
+      } else {
+        setError("You do not have administrator privileges.")
+      }
+    } catch (err) {
+      setError(err.message || "Login failed. Please try again.")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="grid min-h-screen bg-slate-50 lg:grid-cols-2">
+      <div className="hidden bg-slate-950 p-14 text-white lg:flex lg:flex-col lg:justify-between">
+        <div className="flex items-center gap-3">
+          <span className="grid h-11 w-11 place-items-center rounded-xl bg-violet-500 text-lg font-bold">
+            M
+          </span>
+          <div>
+            <div className="font-bold">MindLog AI</div>
+            <div className="text-xs text-slate-400">
+              Restricted administration
+            </div>
+          </div>
+        </div>
+        <div>
+          <div className="mb-5 h-1 w-16 rounded-full bg-cyan-400" />
+          <h1 className="max-w-xl text-5xl font-bold leading-tight tracking-tight">
+            A calm, responsible view of platform operations.
+          </h1>
+          <p className="mt-6 max-w-lg leading-7 text-slate-400">
+            Monitor service health and support users while protecting their
+            private reflections and personal data.
+          </p>
+        </div>
+        <p className="text-xs text-slate-500">
+          Authentication is required. Only Django-verified administrators can
+          access this area.
+        </p>
+      </div>
+      <div className="flex items-center justify-center p-6">
+        <form onSubmit={submit} className="w-full max-w-md">
+          <div className="mb-8 lg:hidden">
+            <span className="grid h-11 w-11 place-items-center rounded-xl bg-violet-600 font-bold text-white">
+              M
+            </span>
+          </div>
+          <p className="text-sm font-semibold text-violet-600">
+            MindLog AI Admin
+          </p>
+          <h2 className="mt-2 text-3xl font-bold tracking-tight">
+            Administration
+          </h2>
+          <p className="mt-2 text-sm text-slate-500">
+            Sign in with an authorized administrator account.
+          </p>
+          <div className="mt-8 space-y-4">
+            <Input
+              label="Email or username"
+              type="text"
+              value={form.usernameOrEmail}
+              onChange={(e) =>
+                setForm({ ...form, usernameOrEmail: e.target.value })
+              }
+              disabled={loading}
+            />
+            <div className="relative">
+              <Input
+                label="Password"
+                type={show ? "text" : "password"}
+                value={form.password}
+                onChange={(e) =>
+                  setForm({ ...form, password: e.target.value })
+                }
+                disabled={loading}
+              />
+              <button
+                type="button"
+                onClick={() => setShow(!show)}
+                className="absolute right-3 top-10 text-slate-400"
+                aria-label="Show password"
+              >
+                {show ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <label className="flex items-center gap-2 text-slate-600">
+                <input
+                  type="checkbox"
+                  defaultChecked
+                  className="accent-violet-600"
+                  disabled={loading}
+                />
+                Remember me
+              </label>
+              <Link
+                className="font-semibold text-violet-600"
+                to="/admin/forgot-password"
+              >
+                Forgot password?
+              </Link>
+            </div>
+            {error && (
+              <div className="rounded-lg bg-rose-50 p-3 text-sm text-rose-700">
+                {error}
+              </div>
+            )}
+            <Button className="w-full" disabled={loading} type="submit">
+              {loading ? "Signing in..." : "Sign in to administration"}
+            </Button>
+          </div>
+          <div className="mt-6 rounded-xl border border-amber-100 bg-amber-50 p-4 text-xs leading-5 text-amber-800">
+            <strong>Admin access required</strong>
+            <br />
+            Only users with administrator privileges can access this panel.
+            Use your regular account credentials.
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+export function Register() {
+  const [show, setShow] = useState(false)
+  const [error, setError] = useState("")
+  const [loading, setLoading] = useState(false)
+  const [form, setForm] = useState({
+    first_name: "",
+    last_name: "",
+    username: "",
+    email: "",
+    password: "",
+    password_confirm: "",
+    terms: false,
+  })
+  const nav = useNavigate()
+  const { register } = useStore()
+
+  const set = (k, v) => setForm({ ...form, [k]: v })
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setError("")
+
+    if (!form.first_name.trim() || !form.email || form.password.length < 8) {
       setError(
-        "Complétez les champs, utilisez 8 caractères et acceptez les conditions.",
+        "Please complete all fields. Password must be at least 8 characters."
       )
       return
     }
-    localStorage.setItem("mindlog_auth", "demo")
-    nav("/onboarding")
+
+    if (form.password !== form.password_confirm) {
+      setError("Passwords do not match.")
+      return
+    }
+
+    if (!form.terms) {
+      setError("Please accept the terms and conditions.")
+      return
+    }
+
+    setLoading(true)
+    try {
+      await register({
+        username: form.username || form.email,
+        email: form.email,
+        password: form.password,
+        password_confirm: form.password_confirm,
+        first_name: form.first_name,
+        last_name: form.last_name,
+      })
+      nav("/login")
+    } catch (err) {
+      setError(err.message || "Registration failed. Please try again.")
+    } finally {
+      setLoading(false)
+    }
   }
+
   return (
     <AuthLayout
-      title="Créez votre espace"
-      subtitle="Commencez à conserver ce qui compte, à votre rythme."
+      title="Create your account"
+      subtitle="Start preserving what matters, at your own pace."
     >
       <form onSubmit={submit} className="grid grid-cols-2 gap-4">
         <Input
-          label="Prénom"
-          value={form.first}
-          onChange={(e) => set("first", e.target.value)}
+          label="First name"
+          value={form.first_name}
+          onChange={(e) => set("first_name", e.target.value)}
+          disabled={loading}
         />
         <Input
-          label="Nom"
-          value={form.last}
-          onChange={(e) => set("last", e.target.value)}
+          label="Last name"
+          value={form.last_name}
+          onChange={(e) => set("last_name", e.target.value)}
+          disabled={loading}
         />
         <Input
           className="col-span-2"
-          label="Nom d’utilisateur"
+          label="Username"
           value={form.username}
           onChange={(e) => set("username", e.target.value)}
+          disabled={loading}
         />
         <Input
           className="col-span-2"
-          label="Adresse email"
+          label="Email address"
           type="email"
           value={form.email}
           onChange={(e) => set("email", e.target.value)}
+          disabled={loading}
         />
         <Input
-          label="Mot de passe"
+          label="Password"
           type={show ? "text" : "password"}
           value={form.password}
           onChange={(e) => set("password", e.target.value)}
+          disabled={loading}
         />
         <Input
-          label="Confirmation"
+          label="Confirm password"
           type={show ? "text" : "password"}
-          value={form.confirm}
-          onChange={(e) => set("confirm", e.target.value)}
+          value={form.password_confirm}
+          onChange={(e) => set("password_confirm", e.target.value)}
+          disabled={loading}
         />
         <button
           type="button"
           className="col-span-2 text-left text-xs font-bold text-violet-600"
           onClick={() => setShow(!show)}
+          disabled={loading}
         >
-          {show ? "Masquer" : "Afficher"} les mots de passe
+          {show ? "Hide" : "Show"} passwords
         </button>
         <div className="col-span-2 h-1.5 rounded-full bg-slate-100">
           <div
@@ -248,47 +453,54 @@ export function Register() {
             checked={form.terms}
             onChange={(e) => set("terms", e.target.checked)}
             className="mt-1 accent-violet-600"
+            disabled={loading}
           />{" "}
-          J’accepte les conditions d’utilisation de la démonstration.
+          I accept the terms of service.
         </label>
-        {error && <p className="col-span-2 text-sm text-red-600">{error}</p>}
-        <Button className="col-span-2">Créer mon compte</Button>
+        {error && (
+          <p className="col-span-2 text-sm text-red-600">{error}</p>
+        )}
+        <Button className="col-span-2" disabled={loading}>
+          {loading ? "Creating account..." : "Create my account"}
+        </Button>
       </form>
       <p className="mt-5 text-center text-sm">
-        Déjà membre ?{" "}
+        Already a member?{" "}
         <Link to="/login" className="font-bold text-violet-600">
-          Se connecter
+          Sign in
         </Link>
       </p>
     </AuthLayout>
   )
 }
+
 export function Forgot({ reset = false }) {
-  const [done, setDone] = useState(false),
-    [value, setValue] = useState("")
+  const [done, setDone] = useState(false)
+  const [value, setValue] = useState("")
+
   return (
     <AuthLayout
       title={
         reset
-          ? "Choisir un nouveau mot de passe"
-          : "Réinitialiser le mot de passe"
+          ? "Choose a new password"
+          : "Reset your password"
       }
-      subtitle="Cette action est simulée dans la version de démonstration."
+      subtitle="This action is simulated in the demo version."
     >
       {done ? (
         <div className="rounded-2xl bg-emerald-50 p-6 text-center">
           <Check className="mx-auto text-emerald-600" />
-          <h2 className="mt-3 font-extrabold">Demande enregistrée</h2>
+          <h2 className="mt-3 font-extrabold">Request recorded</h2>
           <p className="mt-2 text-sm text-slate-600">
             {reset
-              ? "Votre mot de passe démo a été modifié."
-              : "Un lien fictif a été envoyé à votre adresse."}
+              ? "Your demo password has been updated."
+              : "A reset link has been sent to your email."}
           </p>
           <Link
             to="/login"
             className="mt-5 inline-block font-bold text-violet-600"
           >
-            Retour à la connexion
+            Back to login
           </Link>
         </div>
       ) : (
@@ -300,51 +512,54 @@ export function Forgot({ reset = false }) {
           className="space-y-4"
         >
           <Input
-            label={reset ? "Nouveau mot de passe" : "Adresse email"}
+            label={reset ? "New password" : "Email address"}
             type={reset ? "password" : "email"}
             required
             value={value}
             onChange={(e) => setValue(e.target.value)}
           />
           {reset && (
-            <Input label="Confirmer le mot de passe" type="password" required />
+            <Input label="Confirm password" type="password" required />
           )}
           <Button className="w-full">
-            {reset ? "Mettre à jour" : "Envoyer le lien"}
+            {reset ? "Update password" : "Send reset link"}
           </Button>
           <Link
             to="/login"
             className="block text-center text-sm font-bold text-violet-600"
           >
-            Retour à la connexion
+            Back to login
           </Link>
         </form>
       )}
     </AuthLayout>
   )
 }
+
 export function Onboarding() {
-  const [step, setStep] = useState(0),
-    [selected, setSelected] = useState(["Souvenirs", "Études"])
+  const [step, setStep] = useState(0)
+  const [selected, setSelected] = useState(["Memories", "Learning"])
   const nav = useNavigate()
+
   const steps = [
     [
-      "Bienvenue dans MindLog AI",
-      "Nous allons personnaliser votre espace en quelques étapes.",
+      "Welcome to MindLog AI",
+      "We'll personalize your space in a few steps.",
     ],
     [
-      "Vos préférences",
-      "Choisissez la langue et l’apparence qui vous conviennent.",
+      "Your preferences",
+      "Choose the language and appearance that suit you.",
     ],
     [
-      "Ce qui compte pour vous",
-      "Sélectionnez les thèmes que vous souhaitez suivre.",
+      "What matters to you",
+      "Select the topics you want to track.",
     ],
     [
-      "Votre espace est prêt",
-      "Commencez à raconter votre histoire dès aujourd’hui.",
+      "Your space is ready",
+      "Start telling your story today.",
     ],
   ]
+
   return (
     <div className="grid min-h-screen place-items-center bg-slate-50 p-5">
       <div className="w-full max-w-2xl rounded-3xl border border-slate-200 bg-white p-7 shadow-xl sm:p-10">
@@ -366,22 +581,22 @@ export function Onboarding() {
         <div className="my-8 min-h-40">
           {step === 0 && (
             <div className="grid gap-4 sm:grid-cols-2">
-              <Input label="Prénom" defaultValue="Aya" />
-              <Input label="Nom" defaultValue="Mansour" />
+              <Input label="First name" defaultValue="John" />
+              <Input label="Last name" defaultValue="Doe" />
             </div>
           )}
           {step === 1 && (
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="rounded-2xl border-2 border-violet-500 bg-violet-50 p-5 font-bold">
-                Français{" "}
+                English{" "}
                 <span className="block text-sm font-normal text-slate-500">
-                  Langue de l’interface
+                  Interface language
                 </span>
               </label>
               <label className="rounded-2xl border border-slate-200 p-5 font-bold">
-                Mode clair{" "}
+                Light mode{" "}
                 <span className="block text-sm font-normal text-slate-500">
-                  Vous pourrez changer plus tard
+                  You can change this later
                 </span>
               </label>
             </div>
@@ -389,12 +604,12 @@ export function Onboarding() {
           {step === 2 && (
             <div className="flex flex-wrap gap-3">
               {[
-                "Souvenirs",
-                "Émotions",
-                "Habitudes",
-                "Études",
-                "Voyages",
-                "Famille",
+                "Memories",
+                "Emotions",
+                "Habits",
+                "Learning",
+                "Travel",
+                "Family",
               ].map((x) => (
                 <button
                   key={x}
@@ -419,8 +634,7 @@ export function Onboarding() {
           {step === 3 && (
             <div className="rounded-2xl bg-emerald-50 p-6 text-emerald-800">
               <Check className="mb-3" />
-              Vos préférences ont été enregistrées localement pour cette
-              démonstration.
+              Your preferences have been saved to your account.
             </div>
           )}
         </div>
@@ -430,12 +644,12 @@ export function Onboarding() {
             disabled={step === 0}
             onClick={() => setStep(step - 1)}
           >
-            Retour
+            Back
           </Button>
           <div className="flex gap-2">
             {step < 3 && (
               <Button variant="secondary" onClick={() => setStep(3)}>
-                Passer
+                Skip
               </Button>
             )}
             <Button
@@ -443,7 +657,7 @@ export function Onboarding() {
                 step === 3 ? nav("/dashboard") : setStep(step + 1)
               }
             >
-              {step === 3 ? "Ouvrir mon tableau de bord" : "Continuer"}
+              {step === 3 ? "Open dashboard" : "Continue"}
             </Button>
           </div>
         </div>
