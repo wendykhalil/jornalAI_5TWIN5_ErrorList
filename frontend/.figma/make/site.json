@@ -1,0 +1,10 @@
+{
+  "description": "A personal AI-powered journaling app that helps users track moods, organize memories, manage media, and achieve goals with insightful analytics.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

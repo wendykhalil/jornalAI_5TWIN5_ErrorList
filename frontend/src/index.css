@@ -1,0 +1,24 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap");
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  font-family: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  color: #101828;
+  background: #f8fafc;
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; min-width: 320px; min-height: 100vh; }
+button, a, input, textarea, select { transition: border-color .2s, background-color .2s, color .2s, transform .2s; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+
+.dark body, .dark .bg-slate-50 { background: #0f172a !important; }
+.dark .bg-white { background: #111827 !important; }
+.dark .text-slate-950, .dark .text-slate-900, .dark .text-slate-700 { color: #f1f5f9 !important; }
+.dark .border-slate-200, .dark .border-slate-100 { border-color: #334155 !important; }
+.dark input, .dark textarea, .dark select { background: #1e293b; border-color: #334155; color: white; }
