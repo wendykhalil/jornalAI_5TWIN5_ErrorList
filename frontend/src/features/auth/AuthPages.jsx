@@ -1,5 +1,6 @@
 import { useState } from "react"
 import { Link, useNavigate } from "react-router"
+import { authService } from "../../services/authService"
 import {
   Brain,
   Eye,
@@ -10,7 +11,6 @@ import {
   Sparkles,
 } from "lucide-react"
 import { Button, Input } from "../../components/ui"
-
 function AuthLayout({ children, title, subtitle }) {
   return (
     <div className="min-h-screen bg-white lg:grid lg:grid-cols-2">
@@ -68,25 +68,29 @@ function AuthLayout({ children, title, subtitle }) {
 }
 export function Login() {
   const [form, setForm] = useState({
-      email: "demo@mindlog.ai",
-      password: "demo1234",
+      username: "",
+      password: "",
     }),
     [show, setShow] = useState(false),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(false)
   const nav = useNavigate()
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault()
     setError("")
-    if (!form.email.includes("@") || form.password.length < 6) {
-      setError("Vérifiez votre email et votre mot de passe.")
+    if (!form.username.trim() || !form.password) {
+      setError("Saisissez votre nom d’utilisateur et votre mot de passe.")
       return
     }
     setLoading(true)
-    setTimeout(() => {
-      localStorage.setItem("mindlog_auth", "demo")
-      nav("/dashboard")
-    }, 700)
+    try {
+      await authService.login(form.username.trim(), form.password)
+      nav("/dashboard", { replace: true })
+    } catch (err) {
+      setError(err.message || "Connexion impossible.")
+    } finally {
+      setLoading(false)
+    }
   }
   return (
     <AuthLayout
@@ -95,10 +99,10 @@ export function Login() {
     >
       <form onSubmit={submit} className="space-y-4">
         <Input
-          label="Adresse email"
-          type="email"
-          value={form.email}
-          onChange={(e) => setForm({ ...form, email: e.target.value })}
+          label="Nom d’utilisateur"
+          type="text"
+          value={form.username}
+          onChange={(e) => setForm({ ...form, username: e.target.value })}
         />
         <div className="relative">
           <Input
@@ -139,10 +143,6 @@ export function Login() {
           <ArrowRight size={17} />
         </Button>
       </form>
-      <div className="mt-5 rounded-xl bg-slate-50 p-3 text-xs text-slate-500">
-        <b>Accès démo :</b> demo@mindlog.ai · demo1234 — authentification
-        simulée.
-      </div>
       <p className="mt-6 text-center text-sm text-slate-500">
         Pas encore de compte ?{" "}
         <Link className="font-bold text-violet-600" to="/register">
@@ -166,22 +166,30 @@ export function Register() {
     })
   const nav = useNavigate()
   const set = (k, v) => setForm({ ...form, [k]: v })
-  const submit = (e) => {
+  const [loading, setLoading] = useState(false)
+  const submit = async (e) => {
     e.preventDefault()
-    if (
-      !form.first ||
-      !form.email ||
-      form.password.length < 8 ||
-      form.password !== form.confirm ||
-      !form.terms
-    ) {
-      setError(
-        "Complétez les champs, utilisez 8 caractères et acceptez les conditions.",
-      )
+    setError("")
+    if (!form.first.trim() || !form.last.trim() || !form.username.trim() ||
+        !form.email.trim() || form.password.length < 8 ||
+        form.password !== form.confirm || !form.terms) {
+      setError("Complétez les champs, confirmez le mot de passe et acceptez les conditions.")
       return
     }
-    localStorage.setItem("mindlog_auth", "demo")
-    nav("/onboarding")
+    setLoading(true)
+    try {
+      await authService.register({
+        username: form.username.trim(),
+        email: form.email.trim(),
+        password: form.password,
+      })
+      // Registration creates the account; the user logs in separately.
+      nav("/login", { replace: true })
+    } catch (err) {
+      setError(err.message || "Inscription impossible.")
+    } finally {
+      setLoading(false)
+    }
   }
   return (
     <AuthLayout
@@ -249,10 +257,10 @@ export function Register() {
             onChange={(e) => set("terms", e.target.checked)}
             className="mt-1 accent-violet-600"
           />{" "}
-          J’accepte les conditions d’utilisation de la démonstration.
+          J’accepte les conditions d’utilisation.
         </label>
         {error && <p className="col-span-2 text-sm text-red-600">{error}</p>}
-        <Button className="col-span-2">Créer mon compte</Button>
+        <Button className="col-span-2" disabled={loading}>{loading ? "Création..." : "Créer mon compte"}</Button>
       </form>
       <p className="mt-5 text-center text-sm">
         Déjà membre ?{" "}
