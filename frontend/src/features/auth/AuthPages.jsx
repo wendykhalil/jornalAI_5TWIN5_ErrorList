@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { Link, useNavigate } from "react-router"
 import authService from "../../services/authService"
+import { useStore } from "../../store/AppStore"
 import {
   Brain,
   Eye,
@@ -459,41 +460,34 @@ export function Onboarding() {
     </div>
   )
 }
-
-
 export function AdminLogin() {
+  const { login, logout } = useStore()
   const navigate = useNavigate()
 
   const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
-  const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
 
-  const handleSubmit = async (event) => {
-    event.preventDefault()
+  const handleSubmit = async (e) => {
+    e.preventDefault()
     setError("")
     setLoading(true)
 
     try {
-      const response = await authService.login(
-        username.trim(),
-        password
-      )
+      const response = await login(username.trim(), password)
 
-      if (response.user?.role !== "admin") {
-        await authService.logout()
+      const currentUser = response?.user
+
+      if (currentUser?.role !== "admin") {
+        await logout()
         setError("Accès réservé aux administrateurs.")
         return
       }
 
-      navigate("/admin/dashboard", {
-        replace: true,
-      })
+      navigate("/admin/dashboard", { replace: true })
     } catch (err) {
-      setError(
-        err.message || "Erreur de connexion."
-      )
+      setError(err.message || "Erreur de connexion.")
     } finally {
       setLoading(false)
     }
@@ -504,45 +498,21 @@ export function AdminLogin() {
       title="Connexion administrateur"
       subtitle="Accédez à votre espace d'administration MindLog AI."
     >
-      <form
-        onSubmit={handleSubmit}
-        className="space-y-5"
-      >
+      <form onSubmit={handleSubmit} className="space-y-5">
         <Input
           label="Nom d'utilisateur ou email"
           value={username}
-          onChange={(event) =>
-            setUsername(event.target.value)
-          }
+          onChange={(e) => setUsername(e.target.value)}
           required
         />
 
-        <div className="relative">
-          <Input
-            label="Mot de passe"
-            type={showPassword ? "text" : "password"}
-            value={password}
-            onChange={(event) =>
-              setPassword(event.target.value)
-            }
-            required
-          />
-
-          <button
-            type="button"
-            onClick={() =>
-              setShowPassword(!showPassword)
-            }
-            className="absolute right-3 top-10 text-slate-400"
-            aria-label="Afficher le mot de passe"
-          >
-            {showPassword ? (
-              <EyeOff size={18} />
-            ) : (
-              <Eye size={18} />
-            )}
-          </button>
-        </div>
+        <Input
+          label="Mot de passe"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+        />
 
         {error && (
           <p className="rounded-xl bg-red-50 p-3 text-sm text-red-700">
@@ -550,14 +520,8 @@ export function AdminLogin() {
           </p>
         )}
 
-        <Button
-          className="w-full"
-          disabled={loading}
-        >
-          {loading
-            ? "Connexion..."
-            : "Se connecter"}
-          <ArrowRight size={17} />
+        <Button className="w-full" disabled={loading}>
+          {loading ? "Connexion..." : "Se connecter"}
         </Button>
 
         <Link
@@ -570,4 +534,3 @@ export function AdminLogin() {
     </AuthLayout>
   )
 }
-

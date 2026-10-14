@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useMemo, useState, useEffect } from "react"
 import { Link, useNavigate, useParams } from "react-router"
 import {
   Plus,
@@ -49,7 +49,6 @@ import {
   Stat,
   Textarea,
 } from "../../components/ui"
-
 const moodColors = {
   Heureux: "#22c55e",
   Calme: "#22d3ee",
@@ -61,157 +60,106 @@ const moodColors = {
   Triste: "#3b82f6",
   Anxieux: "#ef4444",
 }
-
 function EntryForm({ item }) {
-  const { journals, setJournals, media, notify } = useStore(),
-    nav = useNavigate()
-  const [form, setForm] = useState(
-      item || {
-        title: "",
-        content: "",
-        date: "2026-02-18",
-        mood: "Calme",
-        tags: [],
-        favorite: false,
-      },
-    ),
-    [ai, setAi] = useState(null),
-    [error, setError] = useState("")
-  const save = (draft = false) => {
-    if (!form.title || !form.content) {
+  const { createJournal, updateJournal, media, notify } = useStore()
+  const nav = useNavigate()
+  const [form, setForm] = useState(() => item || {
+    title: "", content: "", date: new Date().toLocaleDateString("en-CA"),
+    mood: "Calme", tags: [], favorite: false, draft: false,
+  })
+  const [tagText, setTagText] = useState(() => (item?.tags || []).join(", "))
+  const [ai, setAi] = useState(null)
+  const [error, setError] = useState("")
+  const [saving, setSaving] = useState(false)
+
+  const save = async (draft = false) => {
+    if (!form.title.trim() || !form.content.trim()) {
       setError("Le titre et le contenu sont requis.")
       return
     }
-    const next = { ...form, id: item?.id || crypto.randomUUID(), draft }
-    setJournals(
-      item
-        ? journals.map((x) => (x.id === item.id ? next : x))
-        : [next, ...journals],
-    )
-    notify(draft ? "Brouillon enregistré" : "Entrée enregistrée")
-    nav(`/journal/${next.id}`)
+    setSaving(true)
+    setError("")
+    const payload = {
+      title: form.title.trim(), content: form.content.trim(), date: form.date,
+      mood: form.mood, favorite: form.favorite, draft,
+      tags: tagText.split(",").map((x) => x.trim()).filter(Boolean),
+    }
+    try {
+      const saved = item
+        ? await updateJournal(item.id, payload)
+        : await createJournal(payload)
+      notify(draft ? "Brouillon enregistré" : "Entrée enregistrée")
+      nav(`/journal/${saved.id}`)
+    } catch (err) {
+      setError(err.message || "Impossible d’enregistrer l’entrée.")
+      notify("Échec de l’enregistrement", "error")
+    } finally {
+      setSaving(false)
+    }
   }
+
   return (
     <>
       <PageHeader
         title={item ? "Modifier l’entrée" : "Nouvelle entrée"}
-        subtitle="Écrivez librement. Vos données restent dans le stockage local de cette démo."
+        subtitle="Écrivez librement. Vos entrées sont enregistrées dans votre journal personnel."
       />
       <div className="grid gap-6 xl:grid-cols-[1fr_340px]">
         <Card className="space-y-5 p-6">
-          <Input
-            label="Titre"
-            placeholder="Donnez un titre à cette journée"
-            value={form.title}
-            onChange={(e) => setForm({ ...form, title: e.target.value })}
-          />
-          <Textarea
-            label="Votre histoire"
-            rows={12}
-            placeholder="Qu’avez-vous envie de retenir ?"
-            value={form.content}
-            onChange={(e) => setForm({ ...form, content: e.target.value })}
-          />
+          <Input label="Titre" placeholder="Donnez un titre à cette journée"
+            value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+          <Textarea label="Votre histoire" rows={12}
+            placeholder="Qu’avez-vous envie de retenir ?" value={form.content}
+            onChange={(e) => setForm({ ...form, content: e.target.value })} />
           <div className="grid gap-4 sm:grid-cols-3">
-            <Input
-              label="Date"
-              type="date"
-              value={form.date}
-              onChange={(e) => setForm({ ...form, date: e.target.value })}
-            />
-            <Select
-              label="Humeur"
-              value={form.mood}
-              onChange={(e) => setForm({ ...form, mood: e.target.value })}
-            >
-              {Object.keys(moodColors).map((x) => (
-                <option key={x}>{x}</option>
-              ))}
+            <Input label="Date" type="date" value={form.date}
+              onChange={(e) => setForm({ ...form, date: e.target.value })} />
+            <Select label="Humeur" value={form.mood}
+              onChange={(e) => setForm({ ...form, mood: e.target.value })}>
+              {Object.keys(moodColors).map((x) => <option key={x}>{x}</option>)}
             </Select>
-            <Input
-              label="Tags (séparés par des virgules)"
-              defaultValue={form.tags.join(", ")}
-              onBlur={(e) =>
-                setForm({
-                  ...form,
-                  tags: e.target.value
-                    .split(",")
-                    .map((x) => x.trim())
-                    .filter(Boolean),
-                })
-              }
-            />
+            <Input label="Tags (séparés par des virgules)" value={tagText}
+              onChange={(e) => setTagText(e.target.value)} />
           </div>
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-red-600" role="alert">{error}</p>}
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => save(false)}>Enregistrer l’entrée</Button>
-            <Button variant="secondary" onClick={() => save(true)}>
+            <Button disabled={saving} onClick={() => save(false)}>
+              {saving ? "Enregistrement..." : "Enregistrer l’entrée"}
+            </Button>
+            <Button disabled={saving} variant="secondary" onClick={() => save(true)}>
               Enregistrer le brouillon
             </Button>
-            <Button variant="ghost" onClick={() => nav("/journal")}>
+            <Button disabled={saving} variant="ghost" onClick={() => nav("/journal")}>
               Annuler
             </Button>
           </div>
         </Card>
         <div className="space-y-5">
           <Card className="p-5">
-            <SectionTitle
-              title="Organiser avec l’IA"
-              subtitle="Suggestions simulées"
-            />
-            <Button
-              variant="ai"
-              className="w-full"
-              onClick={() =>
-                setTimeout(
-                  () =>
-                    setAi({
-                      summary:
-                        "Une réflexion positive sur les progrès et les nouvelles rencontres.",
-                      tags: ["progression", "rencontres", "confiance"],
-                      sentiment: "Positif et serein",
-                    }),
-                  550,
-                )
-              }
-            >
+            <SectionTitle title="Organiser avec l’IA" subtitle="Suggestions simulées" />
+            <Button variant="ai" className="w-full" onClick={() => setAi({
+              summary: "Une réflexion positive sur les progrès et les nouvelles rencontres.",
+              tags: ["progression", "rencontres", "confiance"],
+              sentiment: "Positif et serein",
+            })}>
               <Sparkles size={16} /> Analyser avec l’IA
             </Button>
-            {ai && (
-              <div className="mt-4 space-y-3 text-sm">
-                <p>
-                  <b>Résumé :</b> {ai.summary}
-                </p>
-                <p>
-                  <b>Sentiment :</b> {ai.sentiment}
-                </p>
-                <div className="flex flex-wrap gap-1">
-                  {ai.tags.map((x) => (
-                    <Badge key={x} className="bg-cyan-50 text-cyan-700">
-                      {x}
-                    </Badge>
-                  ))}
-                </div>
-                <p className="text-xs text-slate-400">
-                  Suggestion IA — simulation de démonstration
-                </p>
+            {ai && <div className="mt-4 space-y-3 text-sm">
+              <p><b>Résumé :</b> {ai.summary}</p>
+              <p><b>Sentiment :</b> {ai.sentiment}</p>
+              <div className="flex flex-wrap gap-1">
+                {ai.tags.map((x) => <Badge key={x} className="bg-cyan-50 text-cyan-700">{x}</Badge>)}
               </div>
-            )}
+              <p className="text-xs text-slate-400">Suggestion IA — simulation de démonstration</p>
+            </div>}
           </Card>
           <Card className="p-5">
             <SectionTitle title="Média lié" />
             <div className="grid grid-cols-3 gap-2">
-              {media
-                .filter((x) => x.url)
-                .slice(0, 3)
-                .map((x) => (
-                  <img
-                    key={x.id}
-                    src={x.url}
-                    alt={x.title}
-                    className="aspect-square rounded-lg object-cover"
-                  />
-                ))}
+              {media.filter((x) => x.url).slice(0, 3).map((x) => (
+                <img key={x.id} src={x.url} alt={x.title}
+                  className="aspect-square rounded-lg object-cover" />
+              ))}
             </div>
           </Card>
         </div>
@@ -219,130 +167,132 @@ function EntryForm({ item }) {
     </>
   )
 }
+
 export function JournalPage({ mode = "list" }) {
-  const { journals, setJournals, notify } = useStore(),
-    { id } = useParams()
-  const [q, setQ] = useState(""),
-    [sort, setSort] = useState("new"),
-    [confirm, setConfirm] = useState(false)
-  const item = journals.find((x) => x.id === id)
+  const {
+    journals, journalsLoading, refreshJournals, updateJournal,
+    deleteJournal, notify,
+  } = useStore()
+  const nav = useNavigate()
+  const { id } = useParams()
+  const [q, setQ] = useState("")
+  const [sort, setSort] = useState("new")
+  const [confirm, setConfirm] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+  const item = journals.find((x) => String(x.id) === String(id))
+
+  // Entries are loaded by AppStore after authentication. Refresh if a
+  // detail/edit URL is opened directly and the list has not loaded yet.
+  useEffect(() => {
+    if (mode !== "list" && mode !== "new" && id && !item && !journalsLoading) {
+      refreshJournals().catch((err) => setError(err.message))
+    }
+  }, [id, mode])
+
+  const toggleFavorite = async (entry) => {
+    try {
+      await updateJournal(entry.id, { favorite: !entry.favorite })
+    } catch (err) {
+      notify(err.message || "Impossible de modifier le favori", "error")
+    }
+  }
+
+  const removeEntry = async () => {
+    if (!item || busy) return
+    setBusy(true)
+    setError("")
+    try {
+      await deleteJournal(item.id)
+      notify("Entrée supprimée")
+      setConfirm(false)
+      nav("/journal")
+    } catch (err) {
+      setError(err.message || "Impossible de supprimer l’entrée")
+      notify("Échec de la suppression", "error")
+    } finally {
+      setBusy(false)
+    }
+  }
+
   if (mode === "new") return <EntryForm />
-  if (mode === "edit") return item ? <EntryForm item={item} /> : <Empty />
+  if (mode === "edit") {
+    if (journalsLoading && !item) return <p>Chargement de l’entrée...</p>
+    if (!item) return <Empty title="Entrée introuvable" />
+    return <EntryForm key={item.id} item={item} />
+  }
   if (mode === "detail") {
+    if (journalsLoading && !item) return <p>Chargement de l’entrée...</p>
     if (!item) return <Empty title="Entrée introuvable" />
     return (
       <>
-        <Link
-          to="/journal"
-          className="mb-5 inline-flex items-center gap-2 text-sm font-bold text-slate-500"
-        >
+        <Link to="/journal" className="mb-5 inline-flex items-center gap-2 text-sm font-bold text-slate-500">
           <ArrowLeft size={16} /> Retour au journal
         </Link>
         <Card className="mx-auto max-w-4xl overflow-hidden">
           <div className="border-b border-slate-100 p-7">
             <div className="flex flex-wrap gap-2">
-              <Badge className="bg-violet-50 text-violet-700">
-                {item.mood}
-              </Badge>
-              {item.tags.map((x) => (
-                <Badge key={x}>#{x}</Badge>
-              ))}
+              <Badge className="bg-violet-50 text-violet-700">{item.mood}</Badge>
+              {item.draft && <Badge>Brouillon</Badge>}
+              {(item.tags || []).map((x) => <Badge key={x}>#{x}</Badge>)}
             </div>
             <h1 className="mt-5 text-3xl font-extrabold">{item.title}</h1>
             <p className="mt-2 text-sm text-slate-500">{item.date}</p>
           </div>
           <div className="p-7">
-            <p className="whitespace-pre-line leading-8 text-slate-700">
-              {item.content}
-            </p>
+            <p className="whitespace-pre-line leading-8 text-slate-700">{item.content}</p>
             <div className="mt-8 rounded-2xl border border-cyan-100 bg-cyan-50 p-5">
-              <div className="font-extrabold text-cyan-900">
-                Résumé et thèmes suggérés par l’IA
-              </div>
+              <div className="font-extrabold text-cyan-900">Résumé et thèmes suggérés par l’IA</div>
               <p className="mt-2 text-sm text-cyan-800">
-                Cette entrée évoque la progression personnelle, l’apprentissage
-                et la gratitude.
+                Cette entrée évoque la progression personnelle, l’apprentissage et la gratitude.
               </p>
               <p className="mt-2 text-xs text-cyan-700">
-                Simulation de démonstration — ce résultat n’est pas une analyse
-                réelle.
+                Simulation de démonstration — ce résultat n’est pas une analyse réelle.
               </p>
             </div>
             <div className="mt-6 flex gap-2">
-              <Link to={`/journal/${id}/edit`}>
-                <Button variant="secondary">
-                  <Edit3 size={16} /> Modifier
-                </Button>
+              <Link to={`/journal/${item.id}/edit`}>
+                <Button variant="secondary"><Edit3 size={16} /> Modifier</Button>
               </Link>
               <Button variant="danger" onClick={() => setConfirm(true)}>
                 <Trash2 size={16} /> Supprimer
               </Button>
             </div>
+            {error && <p className="mt-3 text-sm text-red-600" role="alert">{error}</p>}
           </div>
         </Card>
-        <Modal
-          open={confirm}
-          onClose={() => setConfirm(false)}
-          title="Supprimer cette entrée ?"
-          actions={
-            <>
-              <Button variant="secondary" onClick={() => setConfirm(false)}>
-                Annuler
-              </Button>
-              <Button
-                variant="danger"
-                onClick={() => {
-                  setJournals(journals.filter((x) => x.id !== id))
-                  notify("Entrée supprimée")
-                  location.assign("/journal")
-                }}
-              >
-                Confirmer
-              </Button>
-            </>
-          }
-        >
-          Cette action supprimera « {item.title} » du stockage local.
+        <Modal open={confirm} onClose={() => !busy && setConfirm(false)}
+          title="Supprimer cette entrée?" actions={<>
+            <Button variant="secondary" disabled={busy} onClick={() => setConfirm(false)}>Annuler</Button>
+            <Button variant="danger" disabled={busy} onClick={removeEntry}>
+              {busy ? "Suppression..." : "Confirmer"}
+            </Button>
+          </>}>
+          Cette action supprimera définitivement « {item.title} » de votre journal.
         </Modal>
       </>
     )
   }
-  const list = journals
-    .filter((x) =>
-      [x.title, x.content, ...x.tags]
-        .join(" ")
-        .toLowerCase()
-        .includes(q.toLowerCase()),
-    )
-    .sort((a, b) =>
-      sort === "title"
-        ? a.title.localeCompare(b.title)
-        : sort === "old"
-          ? a.date.localeCompare(b.date)
-          : b.date.localeCompare(a.date),
-    )
+
+  const list = [...journals]
+    .filter((x) => [x.title, x.content, ...(x.tags || [])]
+      .join(" ").toLowerCase().includes(q.toLowerCase()))
+    .sort((a, b) => sort === "title"
+      ? a.title.localeCompare(b.title)
+      : sort === "old" ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date))
+
   return (
     <>
-      <PageHeader
-        title="Mon journal"
+      <PageHeader title="Mon journal"
         subtitle="Un espace pour écrire, comprendre et revisiter vos journées."
-        actions={
-          <Link to="/journal/new">
-            <Button>
-              <Plus size={17} /> Nouvelle entrée
-            </Button>
-          </Link>
-        }
+        actions={<Link to="/journal/new"><Button><Plus size={17} /> Nouvelle entrée</Button></Link>}
       />
       <Card className="mb-5 flex flex-col gap-3 p-4 sm:flex-row">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-3 text-slate-400" size={18} />
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
+          <input value={q} onChange={(e) => setQ(e.target.value)}
             className="w-full rounded-xl border border-slate-200 py-2.5 pl-10 pr-3 outline-none focus:ring-4 focus:ring-violet-100"
-            placeholder="Rechercher dans le journal..."
-          />
+            placeholder="Rechercher dans le journal..." />
         </div>
         <Select value={sort} onChange={(e) => setSort(e.target.value)}>
           <option value="new">Plus récent</option>
@@ -350,54 +300,32 @@ export function JournalPage({ mode = "list" }) {
           <option value="title">Titre A–Z</option>
         </Select>
       </Card>
-      {list.length ? (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {list.map((x) => (
-            <Card key={x.id} className="group p-5">
-              <div className="flex justify-between">
+      {journalsLoading && !journals.length ? <p>Chargement du journal...</p> :
+        list.length ? <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {list.map((x) => <Card key={x.id} className="group p-5">
+            <div className="flex justify-between">
+              <div className="flex gap-2">
                 <Badge className="bg-violet-50 text-violet-700">{x.mood}</Badge>
-                <button
-                  onClick={() =>
-                    setJournals(
-                      journals.map((j) =>
-                        j.id === x.id ? { ...j, favorite: !j.favorite } : j,
-                      ),
-                    )
-                  }
-                >
-                  <Heart
-                    size={18}
-                    className={
-                      x.favorite
-                        ? "fill-rose-500 text-rose-500"
-                        : "text-slate-300"
-                    }
-                  />
-                </button>
+                {x.draft && <Badge>Brouillon</Badge>}
               </div>
-              <Link to={`/journal/${x.id}`}>
-                <h2 className="mt-4 text-lg font-extrabold group-hover:text-violet-600">
-                  {x.title}
-                </h2>
-                <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-500">
-                  {x.content}
-                </p>
-              </Link>
-              <div className="mt-4 flex items-center gap-2 border-t border-slate-100 pt-4 text-xs text-slate-400">
-                <CalendarDays size={14} />
-                {x.date}
-                <div className="ml-auto flex gap-1">
-                  {x.tags.slice(0, 2).map((t) => (
-                    <span key={t}>#{t}</span>
-                  ))}
-                </div>
+              <button aria-label={x.favorite ? "Retirer des favoris" : "Ajouter aux favoris"}
+                onClick={() => toggleFavorite(x)}>
+                <Heart size={18} className={x.favorite
+                  ? "fill-rose-500 text-rose-500" : "text-slate-300"} />
+              </button>
+            </div>
+            <Link to={`/journal/${x.id}`}>
+              <h2 className="mt-4 text-lg font-extrabold group-hover:text-violet-600">{x.title}</h2>
+              <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-500">{x.content}</p>
+            </Link>
+            <div className="mt-4 flex items-center gap-2 border-t border-slate-100 pt-4 text-xs text-slate-400">
+              <CalendarDays size={14} />{x.date}
+              <div className="ml-auto flex gap-1">
+                {(x.tags || []).slice(0, 2).map((t) => <span key={t}>#{t}</span>)}
               </div>
-            </Card>
-          ))}
-        </div>
-      ) : (
-        <Empty />
-      )}
+            </div>
+          </Card>)}
+        </div> : <Empty title="Aucune entrée dans votre journal" />}
     </>
   )
 }
@@ -655,7 +583,6 @@ export function MoodPage({ mode = "dashboard" }) {
     </>
   )
 }
-
 export function MediaPage({ mode = "library" }) {
   const { media, setMedia, notify } = useStore(),
     nav = useNavigate(),
@@ -1015,7 +942,6 @@ export function MediaPage({ mode = "library" }) {
     </>
   )
 }
-
 export function GoalsPage({ mode = "goals" }) {
   const { goals, setGoals, habits, setHabits, notify } = useStore(),
     nav = useNavigate(),
