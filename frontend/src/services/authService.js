@@ -9,6 +9,7 @@
  * - JWT access tokens
  * - JWT refresh tokens
  * - Current user
+ * - Profile updates
  * - Password changes
  */
 
@@ -19,7 +20,6 @@ const API_BASE_URL =
 const TOKEN_KEY = "mindlog_access_token";
 const REFRESH_TOKEN_KEY = "mindlog_refresh_token";
 const USER_KEY = "mindlog_user";
-
 
 /**
  * Save JWT tokens.
@@ -37,7 +37,6 @@ function setTokens(accessToken, refreshToken) {
   }
 }
 
-
 /**
  * Get access token.
  */
@@ -45,14 +44,12 @@ function getAccessToken() {
   return localStorage.getItem(TOKEN_KEY);
 }
 
-
 /**
  * Get refresh token.
  */
 function getRefreshToken() {
   return localStorage.getItem(REFRESH_TOKEN_KEY);
 }
-
 
 /**
  * Remove authentication data.
@@ -63,16 +60,55 @@ function clearAuth() {
   localStorage.removeItem(USER_KEY);
 }
 
+/**
+ * Format API errors.
+ */
+function getErrorMessage(data, fallback) {
+  if (!data || typeof data !== "object") {
+    return fallback;
+  }
+
+  if (typeof data.detail === "string") {
+    return data.detail;
+  }
+
+  if (typeof data.message === "string") {
+    return data.message;
+  }
+
+  const messages = Object.entries(data).flatMap(
+    ([field, errors]) => {
+      const values = Array.isArray(errors)
+        ? errors
+        : [errors];
+
+      return values.map((error) => {
+        const message =
+          typeof error === "string"
+            ? error
+            : JSON.stringify(error);
+
+        return `${field}: ${message}`;
+      });
+    }
+  );
+
+  return messages.length
+    ? messages.join(" | ")
+    : fallback;
+}
 
 /**
- * Generic API request handler.
+ * Generic authenticated API request.
  */
 async function apiRequest(endpoint, options = {}) {
+  const { skipRefresh = false, ...fetchOptions } = options;
+
   const url = `${API_BASE_URL}${endpoint}`;
 
   const headers = {
     "Content-Type": "application/json",
-    ...options.headers,
+    ...fetchOptions.headers,
   };
 
   const token = getAccessToken();
@@ -82,21 +118,23 @@ async function apiRequest(endpoint, options = {}) {
   }
 
   const response = await fetch(url, {
-    ...options,
+    ...fetchOptions,
     headers,
   });
 
-  // Attempt refresh if access token expired.
+  /**
+   * Refresh the access token when it expires.
+   */
   if (
     response.status === 401 &&
     token &&
-    !options.skipRefresh
+    !skipRefresh
   ) {
     const refreshed = await refreshAccessToken();
 
     if (refreshed) {
       return apiRequest(endpoint, {
-        ...options,
+        ...fetchOptions,
         skipRefresh: true,
       });
     }
@@ -108,14 +146,19 @@ async function apiRequest(endpoint, options = {}) {
     );
   }
 
+  /**
+   * Handle API errors.
+   */
   if (!response.ok) {
     const errorData = await response
       .json()
       .catch(() => ({}));
 
     throw new Error(
-      errorData.detail ||
-      `API error: ${response.status}`
+      getErrorMessage(
+        errorData,
+        `API error: ${response.status}`
+      )
     );
   }
 
@@ -125,7 +168,6 @@ async function apiRequest(endpoint, options = {}) {
 
   return response.json();
 }
-
 
 /**
  * Validate login response and save tokens.
@@ -169,17 +211,13 @@ function validateAndSetTokens(loginResponse) {
     loginResponse.refresh
   );
 
-  localStorage.setItem(
-    USER_KEY,
-    JSON.stringify(loginResponse.user)
-  );
+  setCachedUser(loginResponse.user);
 
   return true;
 }
 
-
 /**
- * Refresh access token.
+ * Refresh expired JWT access token.
  */
 async function refreshAccessToken() {
   const refreshToken = getRefreshToken();
@@ -189,8 +227,6 @@ async function refreshAccessToken() {
   }
 
   try {
-    // Use fetch directly to avoid recursive
-    // token-refresh requests.
     const response = await fetch(
       `${API_BASE_URL}/auth/token/refresh/`,
       {
@@ -231,9 +267,8 @@ async function refreshAccessToken() {
   }
 }
 
-
 /**
- * Register user.
+ * Register a new user.
  */
 export async function register(userData) {
   const response = await fetch(
@@ -253,25 +288,23 @@ export async function register(userData) {
       .catch(() => ({}));
 
     throw new Error(
-      errorData.detail ||
-      JSON.stringify(errorData) ||
-      `Registration failed: ${response.status}`
+      getErrorMessage(
+        errorData,
+        `Registration failed: ${response.status}`
+      )
     );
   }
 
   return response.json();
 }
 
-
 /**
- * Login user.
+ * Login and store JWT tokens.
  */
 export async function login(
   usernameOrEmail,
   password
 ) {
-  // Do not attach an old access token
-  // when performing a new login.
   const response = await fetch(
     `${API_BASE_URL}/auth/login/`,
     {
@@ -292,9 +325,10 @@ export async function login(
       .catch(() => ({}));
 
     throw new Error(
-      errorData.detail ||
-      JSON.stringify(errorData) ||
-      `Login failed: ${response.status}`
+      getErrorMessage(
+        errorData,
+        `Login failed: ${response.status}`
+      )
     );
   }
 
@@ -309,24 +343,73 @@ export async function login(
   return data;
 }
 
-
 /**
- * Get current authenticated user.
+ * Get the currently authenticated user.
+ *
+ * GET /api/auth/me/
  */
 export async function getCurrentUser() {
   try {
-    return await apiRequest("/auth/me/", {
+    const user = await apiRequest("/auth/me/", {
       method: "GET",
     });
+
+    setCachedUser(user);
+
+    return user;
   } catch (error) {
-    clearAuth();
+    // Preserve authentication data for temporary
+    // server errors. Clear only expired sessions.
+    if (error.message.includes("Session expired")) {
+      clearAuth();
+    }
+
     throw error;
   }
 }
 
+/**
+ * Update authenticated user's profile.
+ *
+ * PATCH /api/auth/me/
+ *
+ * The backend must support PATCH on this endpoint.
+ */
+export async function updateProfile(profileData) {
+  const allowedFields = [
+    "first_name",
+    "last_name",
+    "username",
+    "email",
+  ];
+
+  const payload = {};
+
+  for (const field of allowedFields) {
+    if (Object.prototype.hasOwnProperty.call(
+      profileData,
+      field
+    )) {
+      payload[field] = profileData[field];
+    }
+  }
+
+  const updatedUser = await apiRequest(
+    "/auth/me/",
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }
+  );
+
+  // Keep localStorage synchronized with Django.
+  setCachedUser(updatedUser);
+
+  return updatedUser;
+}
 
 /**
- * Logout user.
+ * Logout and blacklist refresh token.
  */
 export async function logout() {
   const refreshToken = getRefreshToken();
@@ -339,7 +422,7 @@ export async function logout() {
           refresh: refreshToken,
         }),
 
-        // Do not refresh tokens during logout.
+        // Never refresh JWT during logout.
         skipRefresh: true,
       });
     }
@@ -349,38 +432,37 @@ export async function logout() {
       error
     );
   } finally {
-    // Always remove tokens locally.
     clearAuth();
   }
 }
 
-
 /**
- * Change password.
+ * Change authenticated user's password.
  */
 export async function changePassword(
   oldPassword,
   newPassword,
   newPasswordConfirm
 ) {
-  return apiRequest("/auth/change-password/", {
-    method: "POST",
-    body: JSON.stringify({
-      old_password: oldPassword,
-      new_password: newPassword,
-      new_password_confirm: newPasswordConfirm,
-    }),
-  });
+  return apiRequest(
+    "/auth/change-password/",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        old_password: oldPassword,
+        new_password: newPassword,
+        new_password_confirm: newPasswordConfirm,
+      }),
+    }
+  );
 }
 
-
 /**
- * Check authentication state.
+ * Check whether an access token exists.
  */
 export function isAuthenticated() {
   return !!getAccessToken();
 }
-
 
 /**
  * Get cached user.
@@ -389,15 +471,16 @@ export function getCachedUser() {
   const userJson = localStorage.getItem(USER_KEY);
 
   try {
-    return userJson ? JSON.parse(userJson) : null;
+    return userJson
+      ? JSON.parse(userJson)
+      : null;
   } catch {
     return null;
   }
 }
 
-
 /**
- * Update cached user.
+ * Save updated user information.
  */
 export function setCachedUser(user) {
   if (user) {
@@ -407,7 +490,6 @@ export function setCachedUser(user) {
     );
   }
 }
-
 
 /**
  * Get login redirect path.
@@ -420,9 +502,8 @@ export function getLoginRedirectPath() {
     : "/login";
 }
 
-
 /**
- * Get stored tokens.
+ * Get stored JWT tokens.
  */
 export function getTokens() {
   return {
@@ -430,7 +511,6 @@ export function getTokens() {
     refreshToken: getRefreshToken(),
   };
 }
-
 
 /**
  * Default authentication service.
@@ -440,6 +520,7 @@ export default {
   login,
   logout,
   getCurrentUser,
+  updateProfile,
   changePassword,
   isAuthenticated,
   getCachedUser,
