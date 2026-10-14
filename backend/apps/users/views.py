@@ -1,199 +1,195 @@
+from rest_framework import status, viewsets
+from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenRefreshView
+from django.contrib.auth import get_user_model
 
-import json
+from .serializers import (
+    RegisterSerializer,
+    LoginSerializer,
+    UserSerializer,
+    RefreshTokenSerializer,
+    ChangePasswordSerializer,
+)
 
-from django.contrib.auth import authenticate, get_user_model, login, logout
-from django.contrib.auth.password_validation import validate_password
-from django.core.exceptions import ValidationError
-from django.db import IntegrityError
-from django.http import JsonResponse
-from django.views.decorators.csrf import ensure_csrf_cookie
-from django.views.decorators.http import require_GET, require_POST
+User = get_user_model()
 
 
-# =====================================
-# REGISTER
-# =====================================
-
-@require_POST
-def register(request):
-    try:
-        data = json.loads(request.body)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return JsonResponse(
-            {"error": "Invalid JSON data"},
-            status=400
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def register_view(request):
+    """
+    Register a new user.
+    
+    POST /api/auth/register/
+    {
+        "username": "string",
+        "email": "user@example.com",
+        "password": "secure_password",
+        "password_confirm": "secure_password",
+        "first_name": "optional",
+        "last_name": "optional"
+    }
+    
+    Returns:
+    {
+        "id": 1,
+        "username": "user",
+        "email": "user@example.com",
+        "role": "user"
+    }
+    """
+    if request.method == 'POST':
+        serializer = RegisterSerializer(data=request.data)
+        if serializer.is_valid():
+            user = serializer.save()
+            user_data = UserSerializer(user).data
+            return Response(
+                {
+                    'message': 'User registered successfully.',
+                    'user': user_data
+                },
+                status=status.HTTP_201_CREATED
+            )
+        
+        return Response(
+            serializer.errors,
+            status=status.HTTP_400_BAD_REQUEST
         )
 
-    if not isinstance(data, dict):
-        return JsonResponse(
-            {"error": "Expected a JSON object"},
-            status=400
-        )
 
-    username = data.get("username")
-    email = data.get("email")
-    password = data.get("password")
-
-    if not all(
-        isinstance(v, str) and v.strip()
-        for v in (username, email, password)
-    ):
-        return JsonResponse(
-            {"error": "All fields are required"},
-            status=400
-        )
-
-    username = username.strip()
-    email = email.strip()
-
-    User = get_user_model()
-
-    if User.objects.filter(username=username).exists():
-        return JsonResponse(
-            {"error": "Username already exists"},
-            status=400
-        )
-
-    try:
-        validate_password(
-            password,
-            user=User(username=username, email=email)
-        )
-    except ValidationError as e:
-        return JsonResponse(
-            {"errors": e.messages},
-            status=400
-        )
-
-    try:
-        user = User.objects.create_user(
-            username=username,
-            email=email,
-            password=password,
-            is_staff=False,
-            is_superuser=False
-        )
-    except (IntegrityError, ValidationError):
-        return JsonResponse(
-            {"error": "Unable to create account"},
-            status=400
-        )
-
-    return JsonResponse(
-        {
-            "message": "Account created successfully",
-            "user": {
-                "id": user.id,
-                "username": user.username,
-                "email": user.email,
-                "role": "user"
-            }
-        },
-        status=201
-    )
-
-
-# =====================================
-# CSRF TOKEN
-# =====================================
-
-@ensure_csrf_cookie
-@require_GET
-def csrf_token(request):
-    return JsonResponse({
-        "message": "CSRF cookie set"
-    })
-
-
-# =====================================
-# LOGIN
-# =====================================
-
-@require_POST
-def login_user(request):
-    try:
-        data = json.loads(request.body)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return JsonResponse(
-            {"error": "Invalid JSON"},
-            status=400
-        )
-
-    if not isinstance(data, dict):
-        return JsonResponse(
-            {"error": "Invalid data"},
-            status=400
-        )
-
-    username = data.get("username")
-    password = data.get("password")
-
-    if not isinstance(username, str) or not isinstance(password, str):
-        return JsonResponse(
-            {"error": "Username and password required"},
-            status=400
-        )
-
-    user = authenticate(
-        request,
-        username=username,
-        password=password
-    )
-
-    if user is None:
-        return JsonResponse(
-            {"error": "Invalid credentials"},
-            status=401
-        )
-
-    login(request, user)
-
-    return JsonResponse({
-        "message": "Login successful",
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def login_view(request):
+    """
+    Authenticate user and return JWT tokens.
+    
+    POST /api/auth/login/
+    {
+        "username_or_email": "user@example.com or username",
+        "password": "password"
+    }
+    
+    Returns:
+    {
         "user": {
-            "id": user.id,
-            "username": user.username,
-            "role": "admin" if user.is_staff else "user"
-        }
-    })
-
-
-# =====================================
-# LOGOUT
-# =====================================
-
-@require_POST
-def logout_user(request):
-    if not request.user.is_authenticated:
-        return JsonResponse(
-            {"error": "Not authenticated"},
-            status=401
+            "id": 1,
+            "username": "user",
+            "email": "user@example.com",
+            "role": "user"
+        },
+        "access": "jwt_token",
+        "refresh": "refresh_token"
+    }
+    """
+    if request.method == 'POST':
+        serializer = LoginSerializer(data=request.data)
+        if serializer.is_valid():
+            return Response(
+                serializer.validated_data,
+                status=status.HTTP_200_OK
+            )
+        
+        return Response(
+            serializer.errors,
+            status=status.HTTP_401_UNAUTHORIZED
         )
 
-    logout(request)
 
-    return JsonResponse({
-        "message": "Logout successful"
-    })
-
-
-# =====================================
-# CURRENT USER
-# =====================================
-
-@require_GET
-def current_user(request):
-    if not request.user.is_authenticated:
-        return JsonResponse(
-            {"error": "Not authenticated"},
-            status=401
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def logout_view(request):
+    """
+    Logout user by blacklisting refresh token.
+    
+    POST /api/auth/logout/
+    Headers: Authorization: Bearer {access_token}
+    {
+        "refresh": "refresh_token"
+    }
+    
+    Note: This is optional. Logout is primarily handled on the frontend by
+    deleting the JWT token. The backend doesn't maintain a logout state
+    for stateless JWT authentication.
+    """
+    try:
+        refresh_token = request.data.get('refresh')
+        if refresh_token:
+            token = RefreshToken(refresh_token)
+            token.blacklist()
+        
+        return Response(
+            {'message': 'Logged out successfully.'},
+            status=status.HTTP_200_OK
+        )
+    except Exception as e:
+        return Response(
+            {'detail': 'Invalid or expired refresh token.'},
+            status=status.HTTP_400_BAD_REQUEST
         )
 
-    user = request.user
 
-    return JsonResponse({
-        "id": user.id,
-        "username": user.username,
-        "email": user.email,
-        "role": "admin" if user.is_staff else "user"
-    })
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def current_user_view(request):
+    """
+    Get current authenticated user information.
+    
+    GET /api/auth/me/
+    Headers: Authorization: Bearer {access_token}
+    
+    Returns:
+    {
+        "id": 1,
+        "username": "user",
+        "email": "user@example.com",
+        "first_name": "John",
+        "last_name": "Doe",
+        "role": "user",
+        "date_joined": "2026-10-13T14:30:00Z"
+    }
+    """
+    serializer = UserSerializer(request.user)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def change_password_view(request):
+    """
+    Change user password.
+    
+    POST /api/auth/change-password/
+    Headers: Authorization: Bearer {access_token}
+    {
+        "old_password": "current_password",
+        "new_password": "new_secure_password",
+        "new_password_confirm": "new_secure_password"
+    }
+    
+    Returns:
+    {
+        "message": "Password changed successfully."
+    }
+    """
+    serializer = ChangePasswordSerializer(
+        data=request.data,
+        context={'user': request.user}
+    )
+    
+    if serializer.is_valid():
+        user = request.user
+        user.set_password(serializer.validated_data['new_password'])
+        user.save()
+        return Response(
+            {'message': 'Password changed successfully.'},
+            status=status.HTTP_200_OK
+        )
+    
+    return Response(
+        serializer.errors,
+        status=status.HTTP_400_BAD_REQUEST
+    )
+

@@ -27,6 +27,7 @@ import {
 import { AdminProvider, useAdmin } from "./AdminContext.jsx"
 import { Button, Badge, SearchField } from "./ui.jsx"
 import { staticData } from "./services.js"
+import { useStore } from "../store/AppStore.jsx"
 
 const groups = [
   ["Overview", [["Dashboard", "/admin/dashboard", LayoutDashboard]]],
@@ -205,8 +206,10 @@ function Shell() {
           </NavLink>
           <button
             onClick={() => {
-              localStorage.removeItem("mindlog-admin-auth")
-              navigate("/admin/login")
+              const { logout } = useStore()
+              logout().then(() => {
+                navigate("/admin/login", { replace: true })
+              })
             }}
             className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-400 hover:bg-white/5 hover:text-white"
           >

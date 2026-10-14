@@ -2,8 +2,9 @@
 import { createBrowserRouter, Navigate } from "react-router"
 
 import AppShell from "../components/AppShell"
+import { ProtectedRoute, GuestRoute, AdminRoute, PublicRoute } from "../components/ProtectedRoute"
 
-import { Login, Register, Forgot, Onboarding } from "../features/auth/AuthPages"
+import { Login, Register, Forgot, Onboarding, AdminLogin } from "../features/auth/AuthPages"
 import Dashboard from "../features/dashboard/Dashboard"
 
 import {
@@ -44,7 +45,6 @@ import {
   CategoriesPage,
   Dashboard as AdminDashboard,
   ForgotPassword,
-  LoginPage,
   MediaDetail,
   ModerationDetail,
   ModerationPage,
@@ -59,7 +59,7 @@ import {
   UsersPage,
 } from "../admin/pages.jsx"
 
-// User routes
+// User routes (protected by AppShell)
 const shell = [
   { path: "dashboard", Component: Dashboard },
 
@@ -104,32 +104,29 @@ const shell = [
   { path: "*", Component: NotFound },
 ]
 
-// Protect Admin pages
-function ProtectedAdmin() {
-  return adminSession.get()
-    ? <AdminLayout />
-    : <Navigate to="/admin/login" replace />
+// Protect Admin pages with JWT auth
+function ProtectedAdminLayout() {
+  return <AdminRoute Component={AdminLayout} />
 }
 
 // Application routes
 export const router = createBrowserRouter([
   // User app
-  { path: "/", element: <Navigate to="/dashboard" replace /> },
-  { path: "/login", Component: Login },
-  { path: "/register", Component: Register },
-  { path: "/forgot-password", element: <Forgot /> },
-  { path: "/reset-password", element: <Forgot reset /> },
-  { path: "/onboarding", Component: Onboarding },
-  { path: "/", Component: AppShell, children: shell },
+  { path: "/login", element: <GuestRoute Component={Login} /> },
+  { path: "/register", element: <PublicRoute Component={Register} /> },
+  { path: "/forgot-password", element: <GuestRoute Component={() => <Forgot />} /> },
+  { path: "/reset-password", element: <GuestRoute Component={() => <Forgot reset />} /> },
+  { path: "/onboarding", element: <ProtectedRoute Component={Onboarding} /> },
+  { path: "/", element: <ProtectedRoute Component={() => <AppShell />} />, children: shell },
 
   // Admin login pages
-  { path: "/admin/login", Component: LoginPage },
+  { path: "/admin/login", element: <GuestRoute Component={AdminLogin} /> },
   { path: "/admin/forgot-password", Component: ForgotPassword },
 
   // Admin dashboard and pages
   {
     path: "/admin",
-    Component: ProtectedAdmin,
+    Component: ProtectedAdminLayout,
     children: [
       { index: true, Component: AdminIndex },
       { path: "dashboard", Component: AdminDashboard },

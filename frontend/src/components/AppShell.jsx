@@ -37,12 +37,14 @@ export default function AppShell() {
   const [open, setOpen] = useState(false),
     [profile, setProfile] = useState(false),
     [collapsed, setCollapsed] = useState(false)
-  const { notifications, toast } = useStore(),
+  const { notifications, toast, logout: storeLogout, user } = useStore(),
     navigate = useNavigate()
   const unread = notifications.filter((n) => !n.read).length
-  const logout = () => {
-    localStorage.removeItem("mindlog_auth")
-    navigate("/login")
+  
+  const logout = async () => {
+    await storeLogout()
+    // Redirect to appropriate login page based on role (before logout clears it)
+    navigate("/login", { replace: true })
   }
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -140,7 +142,7 @@ export default function AppShell() {
           <div className="ml-auto flex items-center gap-2">
             <Button
               variant="ghost"
-              className="relative !p-2.5"
+              className="relative !p-2.5]"
               onClick={() => navigate("/notifications")}
               aria-label="Notifications"
             >

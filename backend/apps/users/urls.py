@@ -1,16 +1,15 @@
 from django.urls import path
-from .views import (
-    register,
-    csrf_token,
-    login_user,
-    logout_user,
-    current_user,
-)
+from rest_framework_simplejwt.views import TokenRefreshView
+from . import views
+
+app_name = 'users'
 
 urlpatterns = [
-    path("csrf/", csrf_token, name="csrf"),
-    path("register/", register, name="register"),
-    path("login/", login_user, name="login"),
-    path("logout/", logout_user, name="logout"),
-    path("me/", current_user, name="current_user"),
+    # Authentication endpoints
+    path('auth/register/', views.register_view, name='register'),
+    path('auth/login/', views.login_view, name='login'),
+    path('auth/logout/', views.logout_view, name='logout'),
+    path('auth/me/', views.current_user_view, name='current-user'),
+    path('auth/change-password/', views.change_password_view, name='change-password'),
+    path('auth/token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
 ]
