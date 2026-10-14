@@ -1,26 +1,82 @@
+
 /**
- * Authentication service for managing user registration, login, logout, and token management.
- * Communicates with Django REST backend using JWT tokens.
+ * MindLog AI Authentication Service
+ *
+ * Handles:
+ * - Registration
+ * - Login
+ * - Logout
+ * - JWT access tokens
+ * - JWT refresh tokens
+ * - Current user
+ * - Password changes
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ||
+  "http://localhost:8000/api";
 
 const TOKEN_KEY = "mindlog_access_token";
 const REFRESH_TOKEN_KEY = "mindlog_refresh_token";
 const USER_KEY = "mindlog_user";
 
+
 /**
- * Generic API request handler with token injection
+ * Save JWT tokens.
+ */
+function setTokens(accessToken, refreshToken) {
+  if (accessToken) {
+    localStorage.setItem(TOKEN_KEY, accessToken);
+  }
+
+  if (refreshToken) {
+    localStorage.setItem(
+      REFRESH_TOKEN_KEY,
+      refreshToken
+    );
+  }
+}
+
+
+/**
+ * Get access token.
+ */
+function getAccessToken() {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+
+/**
+ * Get refresh token.
+ */
+function getRefreshToken() {
+  return localStorage.getItem(REFRESH_TOKEN_KEY);
+}
+
+
+/**
+ * Remove authentication data.
+ */
+function clearAuth() {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
+  localStorage.removeItem(USER_KEY);
+}
+
+
+/**
+ * Generic API request handler.
  */
 async function apiRequest(endpoint, options = {}) {
   const url = `${API_BASE_URL}${endpoint}`;
+
   const headers = {
     "Content-Type": "application/json",
     ...options.headers,
   };
 
-  // Add access token to authorized requests
   const token = getAccessToken();
+
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
@@ -30,198 +86,247 @@ async function apiRequest(endpoint, options = {}) {
     headers,
   });
 
-  // Handle 401 by attempting token refresh
-  if (response.status === 401 && token && !options.skipRefresh) {
+  // Attempt refresh if access token expired.
+  if (
+    response.status === 401 &&
+    token &&
+    !options.skipRefresh
+  ) {
     const refreshed = await refreshAccessToken();
+
     if (refreshed) {
-      // Retry the request with new token
-      return apiRequest(endpoint, { ...options, skipRefresh: true });
-    } else {
-      // Refresh failed, clear auth
-      clearAuth();
-      // Don't redirect here - let caller decide based on context
-      throw new Error("Session expired. Please log in again.");
+      return apiRequest(endpoint, {
+        ...options,
+        skipRefresh: true,
+      });
     }
+
+    clearAuth();
+
+    throw new Error(
+      "Session expired. Please log in again."
+    );
   }
 
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.detail || `API error: ${response.status}`);
+    const errorData = await response
+      .json()
+      .catch(() => ({}));
+
+    throw new Error(
+      errorData.detail ||
+      `API error: ${response.status}`
+    );
   }
 
-  return response.status === 204 ? null : response.json();
-}
-
-/**
- * Store access and refresh tokens
- */
-function setTokens(accessToken, refreshToken) {
-  if (accessToken) {
-    localStorage.setItem(TOKEN_KEY, accessToken);
+  if (response.status === 204) {
+    return null;
   }
-  if (refreshToken) {
-    localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
-  }
+
+  return response.json();
 }
 
-/**
- * Get stored access token
- */
-function getAccessToken() {
-  return localStorage.getItem(TOKEN_KEY);
-}
 
 /**
- * Get stored refresh token
- */
-function getRefreshToken() {
-  return localStorage.getItem(REFRESH_TOKEN_KEY);
-}
-
-/**
- * Clear all authentication data
- */
-function clearAuth() {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(REFRESH_TOKEN_KEY);
-  localStorage.removeItem(USER_KEY);
-}
-
-/**
- * Validate and set tokens after successful login
- * Ensures tokens are only set if both access and refresh tokens are present in the response
- * @param {Object} loginResponse - Response from login endpoint containing user, access, refresh
- * @returns {boolean} - True if tokens were successfully set, false if response was invalid
+ * Validate login response and save tokens.
  */
 function validateAndSetTokens(loginResponse) {
-  // Validate response structure
-  if (!loginResponse || typeof loginResponse !== 'object') {
+  if (
+    !loginResponse ||
+    typeof loginResponse !== "object"
+  ) {
     return false;
   }
 
-  // Both tokens and user must be present for valid login response
-  const hasAccessToken = typeof loginResponse.access === 'string' && loginResponse.access.length > 0;
-  const hasRefreshToken = typeof loginResponse.refresh === 'string' && loginResponse.refresh.length > 0;
-  const hasUser = loginResponse.user && typeof loginResponse.user === 'object';
+  const hasAccessToken =
+    typeof loginResponse.access === "string" &&
+    loginResponse.access.length > 0;
 
-  if (!hasAccessToken || !hasRefreshToken || !hasUser) {
-    console.error("Invalid login response: missing required fields");
+  const hasRefreshToken =
+    typeof loginResponse.refresh === "string" &&
+    loginResponse.refresh.length > 0;
+
+  const hasUser =
+    loginResponse.user &&
+    typeof loginResponse.user === "object";
+
+  if (
+    !hasAccessToken ||
+    !hasRefreshToken ||
+    !hasUser
+  ) {
+    console.error(
+      "Invalid login response: missing required fields"
+    );
+
     return false;
   }
 
-  // Only clear old tokens after validation succeeds
   clearAuth();
 
-  // Set new tokens and user
-  setTokens(loginResponse.access, loginResponse.refresh);
-  localStorage.setItem(USER_KEY, JSON.stringify(loginResponse.user));
+  setTokens(
+    loginResponse.access,
+    loginResponse.refresh
+  );
+
+  localStorage.setItem(
+    USER_KEY,
+    JSON.stringify(loginResponse.user)
+  );
 
   return true;
 }
 
+
 /**
- * Attempt to refresh the access token using the refresh token
+ * Refresh access token.
  */
 async function refreshAccessToken() {
   const refreshToken = getRefreshToken();
+
   if (!refreshToken) {
     return false;
   }
 
   try {
-    const data = await apiRequest("/auth/token/refresh/", {
-      method: "POST",
-      body: JSON.stringify({ refresh: refreshToken }),
-      skipRefresh: true,
-    });
+    // Use fetch directly to avoid recursive
+    // token-refresh requests.
+    const response = await fetch(
+      `${API_BASE_URL}/auth/token/refresh/`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          refresh: refreshToken,
+        }),
+      }
+    );
 
-    if (data.access) {
-      setTokens(data.access, refreshToken);
-      return true;
+    if (!response.ok) {
+      clearAuth();
+      return false;
     }
+
+    const data = await response.json();
+
+    if (!data.access) {
+      clearAuth();
+      return false;
+    }
+
+    setTokens(
+      data.access,
+      data.refresh || refreshToken
+    );
+
+    return true;
   } catch (error) {
     console.error("Token refresh failed:", error);
-    clearAuth();
-  }
 
-  return false;
+    clearAuth();
+
+    return false;
+  }
 }
 
+
 /**
- * Register a new user
- * Registration must NOT use tokens from a currently authenticated session.
- * This prevents an admin's JWT from being attached to registration requests.
- * @param {Object} userData - { username, email, password, password_confirm, first_name, last_name }
- * @returns {Promise<Object>} - User data and success message
+ * Register user.
  */
 export async function register(userData) {
-  // Use fetch directly without attached JWT to ensure registration is independent
-  const url = `${API_BASE_URL}/auth/register/`;
-  
-  try {
-    const response = await fetch(url, {
+  const response = await fetch(
+    `${API_BASE_URL}/auth/register/`,
+    {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(userData),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.detail || `Registration failed: ${response.status}`);
     }
+  );
 
-    return response.json();
-  } catch (error) {
-    throw error;
+  if (!response.ok) {
+    const errorData = await response
+      .json()
+      .catch(() => ({}));
+
+    throw new Error(
+      errorData.detail ||
+      JSON.stringify(errorData) ||
+      `Registration failed: ${response.status}`
+    );
   }
+
+  return response.json();
 }
 
+
 /**
- * Login user and store tokens
- * @param {string} usernameOrEmail - Username or email
- * @param {string} password - User password
- * @returns {Promise<Object>} - User data and tokens
- * @throws {Error} - If login fails or response is invalid
+ * Login user.
  */
-export async function login(usernameOrEmail, password) {
-  const response = await apiRequest("/auth/login/", {
-    method: "POST",
-    body: JSON.stringify({
-      username_or_email: usernameOrEmail,
-      password,
-    }),
-  });
+export async function login(
+  usernameOrEmail,
+  password
+) {
+  // Do not attach an old access token
+  // when performing a new login.
+  const response = await fetch(
+    `${API_BASE_URL}/auth/login/`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        username_or_email: usernameOrEmail,
+        password,
+      }),
+    }
+  );
 
-  // Validate and set tokens - this will throw if response is invalid
-  const tokensSet = validateAndSetTokens(response);
-  if (!tokensSet) {
-    throw new Error("Invalid login response from server");
+  if (!response.ok) {
+    const errorData = await response
+      .json()
+      .catch(() => ({}));
+
+    throw new Error(
+      errorData.detail ||
+      JSON.stringify(errorData) ||
+      `Login failed: ${response.status}`
+    );
   }
 
-  return response;
+  const data = await response.json();
+
+  if (!validateAndSetTokens(data)) {
+    throw new Error(
+      "Invalid login response from server"
+    );
+  }
+
+  return data;
 }
 
+
 /**
- * Get current authenticated user
- * @returns {Promise<Object>} - Current user data
+ * Get current authenticated user.
  */
 export async function getCurrentUser() {
   try {
-    const response = await apiRequest("/auth/me/", {
+    return await apiRequest("/auth/me/", {
       method: "GET",
     });
-    return response;
   } catch (error) {
     clearAuth();
     throw error;
   }
 }
 
+
 /**
- * Logout user and clear tokens
- * @returns {Promise<Object>} - Success response
+ * Logout user.
  */
 export async function logout() {
   const refreshToken = getRefreshToken();
@@ -230,25 +335,34 @@ export async function logout() {
     if (refreshToken) {
       await apiRequest("/auth/logout/", {
         method: "POST",
-        body: JSON.stringify({ refresh: refreshToken }),
+        body: JSON.stringify({
+          refresh: refreshToken,
+        }),
+
+        // Do not refresh tokens during logout.
+        skipRefresh: true,
       });
     }
   } catch (error) {
-    console.error("Logout request failed:", error);
+    console.error(
+      "Logout request failed:",
+      error
+    );
+  } finally {
+    // Always remove tokens locally.
+    clearAuth();
   }
-
-  // Clear local auth data regardless of server response
-  clearAuth();
 }
 
+
 /**
- * Change user password
- * @param {string} oldPassword - Current password
- * @param {string} newPassword - New password
- * @param {string} newPasswordConfirm - New password confirmation
- * @returns {Promise<Object>} - Success response
+ * Change password.
  */
-export async function changePassword(oldPassword, newPassword, newPasswordConfirm) {
+export async function changePassword(
+  oldPassword,
+  newPassword,
+  newPasswordConfirm
+) {
   return apiRequest("/auth/change-password/", {
     method: "POST",
     body: JSON.stringify({
@@ -259,20 +373,21 @@ export async function changePassword(oldPassword, newPassword, newPasswordConfir
   });
 }
 
+
 /**
- * Check if user is authenticated
- * @returns {boolean}
+ * Check authentication state.
  */
 export function isAuthenticated() {
   return !!getAccessToken();
 }
 
+
 /**
- * Get cached user data (from localStorage)
- * @returns {Object|null} - User object or null
+ * Get cached user.
  */
 export function getCachedUser() {
   const userJson = localStorage.getItem(USER_KEY);
+
   try {
     return userJson ? JSON.parse(userJson) : null;
   } catch {
@@ -280,28 +395,34 @@ export function getCachedUser() {
   }
 }
 
+
 /**
- * Set cached user data (usually called after getCurrentUser)
- * @param {Object} user - User object to cache
+ * Update cached user.
  */
 export function setCachedUser(user) {
   if (user) {
-    localStorage.setItem(USER_KEY, JSON.stringify(user));
+    localStorage.setItem(
+      USER_KEY,
+      JSON.stringify(user)
+    );
   }
 }
 
+
 /**
- * Get the appropriate login redirect path for the current auth state
- * @returns {string} - Either "/login" for clients or "/admin/login" for admins
+ * Get login redirect path.
  */
 export function getLoginRedirectPath() {
   const user = getCachedUser();
-  return user?.role === "admin" ? "/admin/login" : "/login";
+
+  return user?.role === "admin"
+    ? "/admin/login"
+    : "/login";
 }
 
+
 /**
- * Get stored tokens (for debugging or testing)
- * @returns {Object} - { accessToken, refreshToken }
+ * Get stored tokens.
  */
 export function getTokens() {
   return {
@@ -310,6 +431,10 @@ export function getTokens() {
   };
 }
 
+
+/**
+ * Default authentication service.
+ */
 export default {
   register,
   login,
