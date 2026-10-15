@@ -21,6 +21,7 @@ import {
   Users,
   Download,
   Save,
+  MessageCircle,
 } from "lucide-react"
 import {
   AreaChart,
@@ -70,6 +71,8 @@ function EntryForm({ item }) {
   })
   const [tagText, setTagText] = useState(() => (item?.tags || []).join(", "))
   const [ai, setAi] = useState(null)
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiError, setAiError] = useState("")
   const [error, setError] = useState("")
   const [saving, setSaving] = useState(false)
 
@@ -137,21 +140,28 @@ function EntryForm({ item }) {
         </Card>
         <div className="space-y-5">
           <Card className="p-5">
-            <SectionTitle title="Organiser avec l’IA" subtitle="Suggestions simulées" />
-            <Button variant="ai" className="w-full" onClick={() => setAi({
-              summary: "Une réflexion positive sur les progrès et les nouvelles rencontres.",
-              tags: ["progression", "rencontres", "confiance"],
-              sentiment: "Positif et serein",
-            })}>
-              <Sparkles size={16} /> Analyser avec l’IA
+            <SectionTitle title="Assistant d’écriture IA" subtitle="Améliorez votre texte sans modifier votre brouillon automatiquement." />
+            <Button variant="ai" className="w-full" disabled={aiBusy || !form.content.trim()}
+              onClick={async () => {
+                setAiBusy(true); setAiError(""); setAi(null)
+                try {
+                  const data = await journalService.improveText(form.content)
+                  if (!data?.improved_text) throw new Error("Réponse IA invalide")
+                  setAi({ improved: data.improved_text, original: form.content })
+                } catch (err) { setAiError(err.message || "Erreur de l’assistant IA") }
+                finally { setAiBusy(false) }
+              }}>
+              <Sparkles size={16} /> {aiBusy ? "Amélioration en cours..." : "Améliorer mon texte"}
             </Button>
+            {aiError && <p role="alert" className="mt-3 text-sm text-red-600">{aiError}</p>}
             {ai && <div className="mt-4 space-y-3 text-sm">
-              <p><b>Résumé :</b> {ai.summary}</p>
-              <p><b>Sentiment :</b> {ai.sentiment}</p>
-              <div className="flex flex-wrap gap-1">
-                {ai.tags.map((x) => <Badge key={x} className="bg-cyan-50 text-cyan-700">{x}</Badge>)}
+              <p className="font-bold">Proposition de l’IA :</p>
+              <p className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-xl bg-violet-50 p-3">{ai.improved}</p>
+              {form.content !== ai.original && <p className="text-amber-700">Votre texte a changé depuis cette suggestion. Vérifiez avant d’appliquer.</p>}
+              <div className="flex flex-wrap gap-2">
+                <Button variant="secondary" onClick={() => { setForm((prev) => ({ ...prev, content: ai.improved })); setAi(null) }}>Appliquer</Button>
+                <Button variant="ghost" onClick={() => setAi(null)}>Ignorer</Button>
               </div>
-              <p className="text-xs text-slate-400">Suggestion IA — simulation de démonstration</p>
             </div>}
           </Card>
           <Card className="p-5">
@@ -174,6 +184,23 @@ export function JournalPage({ mode = "list" }) {
   const nav = useNavigate()
   const { id } = useParams()
 
+  const [showChat, setShowChat] = useState(false)
+  const [chatQuestion, setChatQuestion] = useState("")
+  const [chatMessages, setChatMessages] = useState([])
+  const [chatBusy, setChatBusy] = useState(false)
+  const [chatError, setChatError] = useState("")
+  const askJournal = async () => {
+    const question = chatQuestion.trim()
+    if (!question || chatBusy) return
+    setChatBusy(true); setChatError("")
+    try {
+      const response = await journalService.askJournal(question)
+      if (!response?.answer) throw new Error("Réponse IA invalide")
+      setChatMessages((prev) => [...prev, { question, answer: response.answer, sources: response.sources || [] }])
+      setChatQuestion("")
+    } catch (err) { setChatError(err.message || "Impossible d’interroger votre journal") }
+    finally { setChatBusy(false) }
+  }
   const [showAnalytics, setShowAnalytics] = useState(false)
   const [analytics, setAnalytics] = useState(null)
   const [analyticsLoading, setAnalyticsLoading] = useState(false)
@@ -393,6 +420,9 @@ export function JournalPage({ mode = "list" }) {
       <PageHeader title="Mon journal" subtitle="Un espace pour écrire, comprendre et revisiter vos journées."
         actions={<Link to="/journal/new"><Button><Plus size={17} /> Nouvelle entrée</Button></Link>} />
       <div className="mb-5 flex flex-wrap gap-2">
+        <Button variant="ai" onClick={() => setShowChat((v) => !v)}>
+          <MessageCircle size={16} /> {showChat ? "Fermer le chat IA" : "Discuter avec mon journal"}
+        </Button>
         <Button variant="secondary" onClick={() => setShowAnalytics((value) => !value)}>
           {showAnalytics ? "Masquer les statistiques" : "Voir les statistiques du journal"}
         </Button>
@@ -400,6 +430,26 @@ export function JournalPage({ mode = "list" }) {
           Actualiser les statistiques
         </Button>}
       </div>
+      {showChat && <Card className="mb-6 space-y-4 p-5">
+        <SectionTitle title="Ask My Journal — Chat IA" subtitle="Posez des questions sur vos entrées enregistrées." />
+        <div className="max-h-96 space-y-4 overflow-y-auto" aria-live="polite">
+          {chatMessages.length === 0 && <p className="text-sm text-slate-500">Exemple : Qu’est-ce qui m’a rendu heureux récemment ?</p>}
+          {chatMessages.map((msg, index) => <div key={index} className="space-y-2 rounded-xl bg-slate-50 p-4 text-sm">
+            <p><strong>Vous :</strong> {msg.question}</p>
+            <p className="whitespace-pre-wrap"><strong>Assistant :</strong> {msg.answer}</p>
+            {msg.sources.length > 0 && <div className="flex flex-wrap gap-2">
+              <span className="text-xs text-slate-500">Entrées consultées :</span>
+              {msg.sources.map((src) => <Link key={src.id} to={`/journal/${src.id}`} className="text-xs font-semibold text-violet-600 underline">{src.title} ({src.date})</Link>)}
+            </div>}
+          </div>)}
+        </div>
+        <Textarea label="Votre question" rows={2} value={chatQuestion} onChange={(e) => setChatQuestion(e.target.value)} />
+        {chatError && <p role="alert" className="text-sm text-red-600">{chatError}</p>}
+        <Button variant="ai" disabled={chatBusy || !chatQuestion.trim()} onClick={askJournal}>
+          <Sparkles size={16} /> {chatBusy ? "Recherche en cours..." : "Envoyer"}
+        </Button>
+        <p className="text-xs text-slate-500">Les réponses sont générées par l’IA et peuvent comporter des erreurs. Les sources affichées sont les entrées consultées, pas des citations vérifiées.</p>
+      </Card>}
       {showAnalytics && (
         <div className="mb-6 space-y-5">
           {analyticsLoading && <p className="text-sm text-slate-500">Chargement des statistiques...</p>}

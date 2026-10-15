@@ -100,17 +100,14 @@ export const journalService = {
   // JOURNAL CRUD
   // ==========================================
 
-  // Get journal entries with search, filters and pagination
   getEntries(params = {}) {
     return journalRequest(buildQueryParams(params))
   },
 
-  // Get a single journal entry
   getEntry(id) {
     return journalRequest(`${encodeURIComponent(id)}/`)
   },
 
-  // Create a journal entry
   createEntry(data) {
     return journalRequest("", {
       method: "POST",
@@ -118,7 +115,6 @@ export const journalService = {
     })
   },
 
-  // Update a journal entry
   updateEntry(id, data) {
     return journalRequest(`${encodeURIComponent(id)}/`, {
       method: "PATCH",
@@ -126,7 +122,6 @@ export const journalService = {
     })
   },
 
-  // Delete a journal entry
   deleteEntry(id) {
     return journalRequest(`${encodeURIComponent(id)}/`, {
       method: "DELETE",
@@ -137,16 +132,14 @@ export const journalService = {
   // JOURNAL ANALYTICS
   // ==========================================
 
-  // Get real statistics from Django + MySQL
   getAnalytics() {
     return journalRequest("analytics/")
   },
 
   // ==========================================
-  // REAL AI INTEGRATION — OLLAMA
+  // EXISTING AI ANALYSIS
   // ==========================================
 
-  // Analyze a journal entry using Llama 3.2
   analyzeEntry(id) {
     return journalRequest(
       `${encodeURIComponent(id)}/analyze/`,
@@ -154,6 +147,28 @@ export const journalService = {
         method: "POST",
       }
     )
+  },
+
+  // ==========================================
+  // NEW: AI WRITING ASSISTANT
+  // ==========================================
+
+  improveText(content) {
+    return journalRequest("improve-text/", {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    })
+  },
+
+  // ==========================================
+  // NEW: ASK MY JOURNAL — AI CHAT
+  // ==========================================
+
+  askJournal(question) {
+    return journalRequest("ask/", {
+      method: "POST",
+      body: JSON.stringify({ question }),
+    })
   },
 }
 
