@@ -9,7 +9,6 @@ import {
 
 import {
   habits as seedHabits,
-  initialMedia,
   initialNotifications,
   moods as seedMoods,
   goals as seedGoals,
@@ -17,6 +16,7 @@ import {
 
 import { memoryService } from "../services/memoryService"
 import { journalService } from "../services/journalService"
+import { mediaService } from "../services/mediaService"
 import authService from "../services/authService"
 
 const StoreContext = createContext(null)
@@ -53,15 +53,78 @@ export function AppStore({ children }) {
   const [journalsLoading, setJournalsLoading] = useState(false)
 
   // =========================
-  // OTHER MODULES
+  // MEDIA
   // =========================
+
+  const [media, setMedia] = useState([])
+  const [mediaLoading, setMediaLoading] = useState(false)
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setMedia([])
+      return
+    }
+
+    let active = true
+
+    const loadMedia = async () => {
+      setMediaLoading(true)
+
+      try {
+        const mediaList = await mediaService.getMedia()
+
+        if (!active) return
+
+        setMedia(mediaList)
+      } catch (error) {
+        console.error("Failed to load media:", error)
+      } finally {
+        if (active) {
+          setMediaLoading(false)
+        }
+      }
+    }
+
+    loadMedia()
+
+    return () => {
+      active = false
+    }
+  }, [isAuthenticated, user?.id])
+
+  const refreshMedia = async () => {
+    setMediaLoading(true)
+
+    try {
+      const mediaList = await mediaService.getMedia()
+      setMedia(mediaList)
+      return mediaList
+    } catch (error) {
+      console.error("Failed to refresh media:", error)
+      throw error
+    } finally {
+      setMediaLoading(false)
+    }
+  }
+
+  const uploadMedia = async (file, title, mediaType, description) => {
+    try {
+      const uploadedMedia = await mediaService.uploadMedia(
+        file,
+        title,
+        mediaType,
+        description
+      )
+      setMedia((previous) => [uploadedMedia, ...previous])
+      return uploadedMedia
+    } catch (error) {
+      console.error("Failed to upload media:", error)
+      throw error
+    }
+  }
 
   const [moods, setMoods] = useState(() =>
     stored("mindlog_moods", seedMoods)
-  )
-
-  const [media, setMedia] = useState(() =>
-    stored("mindlog_media", initialMedia)
   )
 
   const [goals, setGoals] = useState(() =>
@@ -143,16 +206,65 @@ export function AppStore({ children }) {
   // =========================
 
   useEffect(() => {
-    if (!isAuthenticated) return
+    if (!isAuthenticated) {
+      setMemories([])
+      return
+    }
 
-    memoryService
-      .getMemories()
-      .then(setMemories)
-      .catch(console.error)
-  }, [isAuthenticated])
+    let active = true
 
-  const refreshMemories = () =>
-    memoryService.getMemories().then(setMemories)
+    const loadMemories = async () => {
+      try {
+        const memories = await memoryService.getMemories(media)
+
+        if (!active) return
+
+        setMemories(memories)
+      } catch (error) {
+        console.error("Failed to load memories:", error)
+      }
+    }
+
+    loadMemories()
+
+    return () => {
+      active = false
+    }
+  }, [isAuthenticated, user?.id, media])
+
+  const refreshMemories = async () => {
+    try {
+      const memories = await memoryService.getMemories(media)
+      setMemories(memories)
+      return memories
+    } catch (error) {
+      console.error("Failed to refresh memories:", error)
+      throw error
+    }
+  }
+
+  const createMemory = async (data) => {
+    const memory = await memoryService.createMemory(data, media)
+    setMemories((previous) => [memory, ...previous])
+    return memory
+  }
+
+  const updateMemory = async (id, data) => {
+    const memory = await memoryService.updateMemory(id, data, media)
+    setMemories((previous) =>
+      previous.map((m) =>
+        String(m.id) === String(id) ? memory : m
+      )
+    )
+    return memory
+  }
+
+  const deleteMemory = async (id) => {
+    await memoryService.deleteMemory(id)
+    setMemories((previous) =>
+      previous.filter((m) => String(m.id) !== String(id))
+    )
+  }
 
   // =========================
   // JOURNAL MANAGEMENT
@@ -417,6 +529,9 @@ export function AppStore({ children }) {
       // Memories
       memories,
       refreshMemories,
+      createMemory,
+      updateMemory,
+      deleteMemory,
 
       // Journal
       journals,
@@ -434,6 +549,9 @@ export function AppStore({ children }) {
       // Media
       media,
       setMedia,
+      mediaLoading,
+      refreshMedia,
+      uploadMedia,
 
       // Goals
       goals,
