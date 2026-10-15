@@ -92,12 +92,12 @@ function buildQueryParams(params = {}) {
 }
 
 export const journalService = {
-  // List entries with search, filters, sorting and pagination
+  // Get journal entries with search, filters and pagination
   getEntries(params = {}) {
     return journalRequest(buildQueryParams(params))
   },
 
-  // Retrieve one entry by ID
+  // Get a single journal entry
   getEntry(id) {
     return journalRequest(`${encodeURIComponent(id)}/`)
   },
@@ -110,7 +110,7 @@ export const journalService = {
     })
   },
 
-  // Update an existing entry
+  // Update a journal entry
   updateEntry(id, data) {
     return journalRequest(`${encodeURIComponent(id)}/`, {
       method: "PATCH",
@@ -118,11 +118,17 @@ export const journalService = {
     })
   },
 
-  // Delete an entry
+  // Delete a journal entry
   deleteEntry(id) {
     return journalRequest(`${encodeURIComponent(id)}/`, {
       method: "DELETE",
     })
+  },
+
+  // JOURNAL ANALYTICS
+  // Get real statistics from Django + MySQL
+  getAnalytics() {
+    return journalRequest("analytics/")
   },
 }
 

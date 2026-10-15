@@ -174,6 +174,24 @@ export function JournalPage({ mode = "list" }) {
   const nav = useNavigate()
   const { id } = useParams()
 
+  const [showAnalytics, setShowAnalytics] = useState(false)
+  const [analytics, setAnalytics] = useState(null)
+  const [analyticsLoading, setAnalyticsLoading] = useState(false)
+  const [analyticsError, setAnalyticsError] = useState("")
+  const [analyticsRevision, setAnalyticsRevision] = useState(0)
+
+  useEffect(() => {
+    if (mode !== "list" || !showAnalytics) return
+    let active = true
+    setAnalyticsLoading(true)
+    setAnalyticsError("")
+    journalService.getAnalytics()
+      .then((data) => { if (active) setAnalytics(data) })
+      .catch((err) => { if (active) setAnalyticsError(err.message || "Erreur analytics") })
+      .finally(() => { if (active) setAnalyticsLoading(false) })
+    return () => { active = false }
+  }, [mode, showAnalytics, analyticsRevision])
+
   const [q, setQ] = useState("")
   const [debouncedQ, setDebouncedQ] = useState("")
   const [sort, setSort] = useState("-date")
@@ -247,6 +265,7 @@ export function JournalPage({ mode = "list" }) {
       await updateJournal(entry.id, { favorite: !entry.favorite })
       setResults((prev) => prev.map((x) => x.id === entry.id ? { ...x, favorite: !entry.favorite } : x))
       if (status === "favorite") setRevision((n) => n + 1)
+      setAnalyticsRevision((n) => n + 1)
     } catch (err) {
       notify(err.message || "Impossible de modifier le favori", "error")
     }
@@ -321,6 +340,81 @@ export function JournalPage({ mode = "list" }) {
     <>
       <PageHeader title="Mon journal" subtitle="Un espace pour écrire, comprendre et revisiter vos journées."
         actions={<Link to="/journal/new"><Button><Plus size={17} /> Nouvelle entrée</Button></Link>} />
+      <div className="mb-5 flex flex-wrap gap-2">
+        <Button variant="secondary" onClick={() => setShowAnalytics((value) => !value)}>
+          {showAnalytics ? "Masquer les statistiques" : "Voir les statistiques du journal"}
+        </Button>
+        {showAnalytics && <Button variant="secondary" onClick={() => setAnalyticsRevision((n) => n + 1)}>
+          Actualiser les statistiques
+        </Button>}
+      </div>
+      {showAnalytics && (
+        <div className="mb-6 space-y-5">
+          {analyticsLoading && <p className="text-sm text-slate-500">Chargement des statistiques...</p>}
+          {analyticsError && <p role="alert" className="text-sm text-red-600">{analyticsError}</p>}
+          {analytics && !analyticsLoading && (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <Stat label="Total des entrées" value={analytics.total_entries} icon={CalendarDays} />
+                <Stat label="Série d'écriture (jours)" value={analytics.current_streak} icon={Flame} />
+                <Stat label="Mots écrits" value={analytics.total_words} icon={Edit3} />
+                <Stat label="Ce mois-ci" value={analytics.entries_this_month} icon={CalendarDays} />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Stat label="Publiées" value={analytics.published_entries} />
+                <Stat label="Brouillons" value={analytics.draft_entries} />
+                <Stat label="Favoris" value={analytics.favorite_entries} />
+              </div>
+              <div className="grid gap-5 lg:grid-cols-2">
+                <Card className="p-5">
+                  <SectionTitle title="Activité des 30 derniers jours" />
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={analytics.daily_activity || []}>
+                        <XAxis dataKey="date" tickFormatter={(date) => date.slice(5)} interval="preserveStartEnd" />
+                        <YAxis allowDecimals={false} />
+                        <Tooltip />
+                        <Bar dataKey="entries" name="Entrées" fill="#6c63ff" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </Card>
+                <Card className="p-5">
+                  <SectionTitle title="Répartition des humeurs" />
+                  {(analytics.mood_distribution || []).length ? (
+                    <div className="h-72">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie data={analytics.mood_distribution} dataKey="count" nameKey="mood" outerRadius={90} label={({ name, value }) => `${name}: ${value}`}>
+                            {analytics.mood_distribution.map((entry, index) => (
+                              <Cell key={entry.mood} fill={moodColors[entry.mood] || Object.values(moodColors)[index % Object.keys(moodColors).length]} />
+                            ))}
+                          </Pie>
+                          <Tooltip />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                  ) : <p className="text-sm text-slate-500">Aucune humeur enregistrée.</p>}
+                </Card>
+              </div>
+              <Card className="p-5">
+                <SectionTitle title="Activité mensuelle" />
+                <div className="h-64">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={analytics.monthly_activity || []}>
+                      <XAxis dataKey="month" />
+                      <YAxis allowDecimals={false} />
+                      <Tooltip />
+                      <Bar dataKey="entries" name="Entrées" fill="#22d3ee" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </Card>
+              <p className="text-xs text-slate-500">Statistiques calculées depuis vos entrées enregistrées. La série utilise la date de l'entrée.</p>
+            </>
+          )}
+        </div>
+      )}
       <Card className="mb-5 space-y-3 p-4">
         <div className="relative">
           <Search className="absolute left-3 top-3 text-slate-400" size={18} />
