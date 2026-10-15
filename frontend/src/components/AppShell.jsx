@@ -277,7 +277,7 @@ export default function AppShell() {
 
             <Button
               variant="ghost"
-              className="relative !p-2.5"
+              className="relative !p-2.5]"
               onClick={() => navigate("/notifications")}
               aria-label="Notifications"
             >
