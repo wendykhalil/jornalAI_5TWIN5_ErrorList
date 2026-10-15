@@ -584,11 +584,12 @@ export function MoodPage({ mode = "dashboard" }) {
   )
 }
 export function MediaPage({ mode = "library" }) {
-  const { media, setMedia, notify } = useStore(),
+  const { media, setMedia, notify, uploadMedia } = useStore(),
     nav = useNavigate(),
     { id } = useParams()
   const [q, setQ] = useState(""),
     [progress, setProgress] = useState(0),
+    [isUploading, setIsUploading] = useState(false),
     [prompt, setPrompt] = useState(
       "Une plage tunisienne paisible au coucher du soleil",
     ),
@@ -598,7 +599,7 @@ export function MediaPage({ mode = "library" }) {
       <>
         <PageHeader
           title="Ajouter un média"
-          subtitle="Les aperçus locaux ne constituent pas un stockage cloud permanent."
+          subtitle="Les médias sont enregistrés et disponibles dans votre bibliothèque."
         />
         <Card className="mx-auto max-w-3xl p-6">
           <label className="grid min-h-52 cursor-pointer place-items-center rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 text-center hover:border-violet-400">
@@ -612,18 +613,25 @@ export function MediaPage({ mode = "library" }) {
             <input
               type="file"
               className="hidden"
-              onChange={() => setProgress(35)}
+              id="file-input"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) {
+                  document.querySelector("#media-title").value = file.name
+                    .replace(/\.[^/.]+$/, "")
+                }
+              }}
             />
           </label>
           <div className="mt-5 grid gap-4 sm:grid-cols-2">
             <Input label="Titre" id="media-title" placeholder="Nom du média" />
-            <Select label="Type">
-              <option>Image</option>
-              <option>Audio</option>
-              <option>Vidéo</option>
-              <option>Document</option>
+            <Select id="media-type" label="Type">
+              <option value="image">Image</option>
+              <option value="audio">Audio</option>
+              <option value="video">Vidéo</option>
+              <option value="document">Document</option>
             </Select>
-            <Textarea label="Description" className="sm:col-span-2" />
+            <Textarea id="media-description" label="Description" className="sm:col-span-2" />
           </div>
           {progress > 0 && (
             <div className="mt-4">
@@ -634,28 +642,51 @@ export function MediaPage({ mode = "library" }) {
                 />
               </div>
               <p className="mt-1 text-xs text-slate-500">
-                Téléversement simulé : {progress}%
+                Téléversement : {progress}%
               </p>
             </div>
           )}
           <Button
             className="mt-5"
-            onClick={() => {
-              const title =
-                document.querySelector("#media-title").value || "Nouveau média"
-              setMedia([
-                {
-                  id: crypto.randomUUID(),
+            onClick={async () => {
+              const fileInput = document.querySelector("#file-input")
+              const file = fileInput?.files?.[0]
+              
+              if (!file) {
+                notify("Sélectionnez un fichier", "error")
+                return
+              }
+              
+              const title = document.querySelector("#media-title").value || file.name
+              const mediaType = document.querySelector("#media-type").value
+              const description = document.querySelector("#media-description").value
+              
+              try {
+                setIsUploading(true)
+                setProgress(0)
+                
+                const uploadedMedia = await uploadMedia(
+                  file,
                   title,
-                  type: "document",
-                  date: "2026-02-18",
-                  description: "Média local de démonstration",
-                },
-                ...media,
-              ])
-              notify("Média ajouté")
-              nav("/media")
+                  mediaType,
+                  description
+                )
+                
+                setProgress(100)
+                notify("Média enregistré avec succès")
+                
+                setTimeout(() => {
+                  nav("/media")
+                  setProgress(0)
+                  setIsUploading(false)
+                }, 500)
+              } catch (error) {
+                setProgress(0)
+                setIsUploading(false)
+                notify(error.message || "Erreur lors du téléversement", "error")
+              }
             }}
+            disabled={isUploading}
           >
             Enregistrer
           </Button>
@@ -791,7 +822,7 @@ export function MediaPage({ mode = "library" }) {
                 ))}
             </Select>
             <div className="mt-5 flex items-center gap-3 rounded-xl bg-slate-950 p-4 text-white">
-              <Button className="!rounded-full !p-3">
+              <Button className="rounded-full! p-3!">
                 <Play size={17} />
               </Button>
               <div className="h-1.5 flex-1 rounded bg-white/20">
@@ -828,8 +859,15 @@ export function MediaPage({ mode = "library" }) {
         {x.url ? (
           <img
             src={x.url}
-            className="max-h-[32rem] w-full object-cover"
+            className="max-h-32rem w-full object-cover"
             alt={x.title}
+            onError={(e) => {
+              // If image fails to load and URL is relative, try with absolute path
+              if (x.url && x.url.startsWith('/')) {
+                const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"
+                e.target.src = `${API_BASE_URL}${x.url}`
+              }
+            }}
           />
         ) : (
           <div className="grid h-72 place-items-center bg-slate-100">
@@ -922,10 +960,17 @@ export function MediaPage({ mode = "library" }) {
                 <img
                   src={x.url}
                   alt={x.title}
-                  className="aspect-[4/3] w-full object-cover"
+                  className="aspect-4/3 w-full object-cover"
+                  onError={(e) => {
+                    // If image fails to load and URL is relative, try with absolute path
+                    if (x.url && x.url.startsWith('/')) {
+                      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"
+                      e.target.src = `${API_BASE_URL}${x.url}`
+                    }
+                  }}
                 />
               ) : (
-                <div className="grid aspect-[4/3] place-items-center bg-slate-100">
+                <div className="grid aspect-4/3 place-items-center bg-slate-100">
                   <Mic className="text-slate-400" />
                 </div>
               )}

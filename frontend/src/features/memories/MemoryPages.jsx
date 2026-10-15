@@ -97,13 +97,20 @@ function MemoryCard({ memory, view = "grid", onDelete }) {
             src={memory.cover}
             alt=""
             className={`w-full object-cover ${
-              view === "list" ? "h-full min-h-48" : "aspect-[16/10]"
+              view === "list" ? "h-full min-h-48" : "aspect-16/10]"
             }`}
+            onError={(e) => {
+              // If image fails to load and URL is relative, try with absolute path
+              if (memory.cover && memory.cover.startsWith('/')) {
+                const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"
+                e.target.src = `${API_BASE_URL}${memory.cover}`
+              }
+            }}
           />
         ) : (
           <div
             className={`grid place-items-center bg-slate-100 text-slate-300 ${
-              view === "list" ? "h-full min-h-48" : "aspect-[16/10]"
+              view === "list" ? "h-full min-h-48" : "aspect-16/10]"
             }`}
           >
             <ImageIcon size={38} />
@@ -188,7 +195,7 @@ function MemoryCard({ memory, view = "grid", onDelete }) {
 }
 
 export function MemoriesList() {
-  const { memories, refreshMemories, notify } = useStore()
+  const { memories, deleteMemory, notify } = useStore()
   const [q, setQ] = useState(""),
     [category, setCategory] = useState("Toutes"),
     [importance, setImportance] = useState("Toutes"),
@@ -217,8 +224,7 @@ export function MemoriesList() {
     [memories, q, category, importance, sort],
   )
   const remove = async () => {
-    await memoryService.deleteMemory(pending.id)
-    await refreshMemories()
+    await deleteMemory(pending.id)
     notify(`« ${pending.title} » a été supprimé`)
     setPending(null)
   }
@@ -392,7 +398,7 @@ export function MemoriesList() {
 
 function MemoryForm({ edit = false }) {
   const { id } = useParams(),
-    { memories, media, refreshMemories, notify } = useStore(),
+    { memories, media, createMemory, updateMemory, notify } = useStore(),
     nav = useNavigate(),
     [params] = useSearchParams()
   const existing = memories.find((x) => x.id === id)
@@ -407,6 +413,7 @@ function MemoryForm({ edit = false }) {
           importance: "medium",
           tags: [],
           mediaIds: [],
+          cover: null,
           favorite: false,
           aiSummary: "",
         },
@@ -460,19 +467,31 @@ function MemoryForm({ edit = false }) {
       return
     }
     const item = edit
-      ? await memoryService.updateMemory(id, { ...form, draft })
-      : await memoryService.createMemory({ ...form, draft })
-    await refreshMemories()
+      ? await updateMemory(id, form)
+      : await createMemory(form)
     notify(draft ? "Brouillon enregistré" : "Souvenir enregistré avec succès")
     nav(`/memories/${item.id}`)
   }
-  const toggleMedia = (id) =>
-    change(
-      "mediaIds",
-      form.mediaIds.includes(id)
-        ? form.mediaIds.filter((x) => x !== id)
-        : [...form.mediaIds, id],
-    )
+  const toggleMedia = (id) => {
+    const mediaIds = form.mediaIds.includes(id)
+      ? form.mediaIds.filter((x) => x !== id)
+      : [...form.mediaIds, id]
+    
+    // Update cover to the first selected media's URL
+    let coverUrl = null
+    if (mediaIds.length > 0 && media.length > 0) {
+      const firstMedia = media.find((m) => String(m.id) === String(mediaIds[0]))
+      if (firstMedia && firstMedia.url) {
+        coverUrl = firstMedia.url
+      }
+    }
+    
+    setForm((f) => ({
+      ...f,
+      mediaIds,
+      cover: coverUrl,
+    }))
+  }
   if (edit && !existing) return <Loading />
   return (
     <>
@@ -712,11 +731,11 @@ function Suggestion({ label, value, onAccept, onDismiss }) {
       <p className="mt-1 text-sm text-cyan-950">{value}</p>
       <div className="mt-3 flex gap-2">
         {onAccept && (
-          <Button className="!px-3 !py-1.5" onClick={onAccept}>
+          <Button className="!px-3] !py-1.5]" onClick={onAccept}>
             <Check size={14} /> Accepter
           </Button>
         )}
-        <Button variant="ghost" className="!px-3 !py-1.5" onClick={onDismiss}>
+        <Button variant="ghost" className="!px-3]!py-1.5" onClick={onDismiss}>
           <X size={14} /> Rejeter
         </Button>
       </div>
@@ -726,7 +745,7 @@ function Suggestion({ label, value, onAccept, onDismiss }) {
 
 export function MemoryDetail() {
   const { id } = useParams(),
-    { memories, media, refreshMemories, notify } = useStore(),
+    { memories, media, deleteMemory, notify } = useStore(),
     nav = useNavigate(),
     [pending, setPending] = useState(false),
     [similar, setSimilar] = useState([]),
@@ -738,8 +757,7 @@ export function MemoryDetail() {
   if (!m) return <Loading label="Chargement du souvenir..." />
   const linked = media.filter((x) => m.mediaIds.includes(x.id))
   const remove = async () => {
-    await memoryService.deleteMemory(id)
-    await refreshMemories()
+    await deleteMemory(id)
     notify("Souvenir supprimé")
     nav("/memories")
   }
@@ -778,7 +796,14 @@ export function MemoryDetail() {
               <img
                 src={m.cover}
                 alt=""
-                className="max-h-[34rem] w-full object-cover"
+                className="max-h-34rem] w-full object-cover"
+                onError={(e) => {
+                  // If image fails to load and URL is relative, try with absolute path
+                  if (m.cover && m.cover.startsWith('/')) {
+                    const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"
+                    e.target.src = `${API_BASE_URL}${m.cover}`
+                  }
+                }}
               />
             )}
             <div className="p-7">
@@ -831,6 +856,13 @@ export function MemoryDetail() {
                         src={x.url}
                         alt={x.title}
                         className="aspect-square w-full rounded-xl object-cover"
+                        onError={(e) => {
+                          // If image fails to load and URL is relative, try with absolute path
+                          if (x.url && x.url.startsWith('/')) {
+                            const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"
+                            e.target.src = `${API_BASE_URL}${x.url}`
+                          }
+                        }}
                       />
                     ) : (
                       <div className="grid aspect-square place-items-center rounded-xl bg-slate-100">
