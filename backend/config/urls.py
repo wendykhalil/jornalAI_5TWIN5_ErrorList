@@ -1,5 +1,7 @@
 from django.contrib import admin
 from django.urls import path, include
+from django.conf import settings
+from django.conf.urls.static import static
 
 
 urlpatterns = [
@@ -10,4 +12,14 @@ urlpatterns = [
 
     # Journal Management API
     path("api/", include("apps.journal.urls")),
+    
+    # Memories Management API
+    path("api/", include("apps.memories.urls")),
+    
+    # Media Management API
+    path("api/", include("apps.media.urls")),
 ]
+
+# Serve media files in development
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
