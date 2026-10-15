@@ -90,6 +90,8 @@ export default function AppShell() {
 
     try {
       await storeLogout()
+    } catch (error) {
+      console.error("Logout error (local state will still be cleared):", error)
     } finally {
       navigate("/login", { replace: true })
     }

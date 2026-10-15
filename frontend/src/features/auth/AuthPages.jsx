@@ -76,6 +76,7 @@ export function Login() {
     [error, setError] = useState(""),
     [loading, setLoading] = useState(false)
   const nav = useNavigate()
+  const { login } = useStore()
   const submit = async (e) => {
     e.preventDefault()
     setError("")
@@ -85,7 +86,10 @@ export function Login() {
     }
     setLoading(true)
     try {
-      await authService.login(form.username.trim(), form.password)
+      await login(form.username.trim(), form.password)
+      // AppStore.login() updates user and isAuthenticated state
+      // Navigation to /dashboard will trigger GuestRoute which redirects
+      // authenticated users based on their role (user → /dashboard, admin → /admin/dashboard)
       nav("/dashboard", { replace: true })
     } catch (err) {
       setError(err.message || "Connexion impossible.")
@@ -182,7 +186,10 @@ export function Register() {
       await authService.register({
         username: form.username.trim(),
         email: form.email.trim(),
+        first_name: form.first.trim(),
+        last_name: form.last.trim(),
         password: form.password,
+        password_confirm: form.confirm,
       })
       // Registration creates the account; the user logs in separately.
       nav("/login", { replace: true })
@@ -461,9 +468,7 @@ export function Onboarding() {
   )
 }
 export function AdminLogin() {
-  const { login, logout } = useStore()
-  const navigate = useNavigate()
-
+  const { user: storeUser } = useStore()
   const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [loading, setLoading] = useState(false)
@@ -475,11 +480,12 @@ export function AdminLogin() {
     setLoading(true)
 
     try {
-      const response = await login(username.trim(), password)
+      await login(username.trim(), password)
 
-      const currentUser = response?.user
-
-      if (currentUser?.role !== "admin") {
+      // AppStore.login() has completed and updated user state.
+      // Verify the logged-in user is an admin.
+      if (storeUser?.role !== "admin") {
+        // Not an admin. Log out and show error.
         await logout()
         setError("Accès réservé aux administrateurs.")
         return

@@ -75,6 +75,7 @@ function Shell() {
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState("")
   const { store, toast } = useAdmin()
+  const { logout } = useStore()
   const navigate = useNavigate()
   const location = useLocation()
   useEffect(() => setMobile(false), [location.pathname])
@@ -205,11 +206,14 @@ function Shell() {
             {!collapsed && "Back to User App"}
           </NavLink>
           <button
-            onClick={() => {
-              const { logout } = useStore()
-              logout().then(() => {
+            onClick={async () => {
+              try {
+                await logout()
+              } catch (error) {
+                console.error("Logout error (local state will still be cleared):", error)
+              } finally {
                 navigate("/admin/login", { replace: true })
-              })
+              }
             }}
             className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-400 hover:bg-white/5 hover:text-white"
           >

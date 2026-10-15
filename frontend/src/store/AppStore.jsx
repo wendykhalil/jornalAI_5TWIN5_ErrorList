@@ -94,6 +94,7 @@ export function AppStore({ children }) {
 
       try {
         if (authService.isAuthenticated()) {
+          // Token exists. Validate it with the backend.
           const currentUser =
             await authService.getCurrentUser()
 
@@ -105,8 +106,10 @@ export function AppStore({ children }) {
         } else {
           if (!active) return
 
+          // No valid token. Clear all auth state and cached user.
           setUser(null)
           setIsAuthenticated(false)
+          authService.clearAuth()
         }
       } catch (error) {
         console.error(
@@ -116,9 +119,11 @@ export function AppStore({ children }) {
 
         if (!active) return
 
+        // Token validation failed. Clear all auth data.
         setUser(null)
         setIsAuthenticated(false)
         setAuthError(error.message)
+        authService.clearAuth()
       } finally {
         if (active) {
           setAuthLoading(false)
@@ -323,6 +328,9 @@ export function AppStore({ children }) {
         authService.setCachedUser(currentUser)
 
         notify("Logged in successfully")
+        
+        // Return the fresh user object from getCurrentUser(), not the login response
+        return { user: currentUser }
       }
 
       return response
