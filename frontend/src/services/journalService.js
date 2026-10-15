@@ -73,15 +73,36 @@ async function journalRequest(
   return response.json()
 }
 
+function buildQueryParams(params = {}) {
+  const query = new URLSearchParams()
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (
+      value !== undefined &&
+      value !== null &&
+      value !== ""
+    ) {
+      query.set(key, String(value))
+    }
+  })
+
+  const result = query.toString()
+
+  return result ? `?${result}` : ""
+}
+
 export const journalService = {
-  getEntries() {
-    return journalRequest()
+  // List entries with search, filters, sorting and pagination
+  getEntries(params = {}) {
+    return journalRequest(buildQueryParams(params))
   },
 
+  // Retrieve one entry by ID
   getEntry(id) {
     return journalRequest(`${encodeURIComponent(id)}/`)
   },
 
+  // Create a journal entry
   createEntry(data) {
     return journalRequest("", {
       method: "POST",
@@ -89,6 +110,7 @@ export const journalService = {
     })
   },
 
+  // Update an existing entry
   updateEntry(id, data) {
     return journalRequest(`${encodeURIComponent(id)}/`, {
       method: "PATCH",
@@ -96,6 +118,7 @@ export const journalService = {
     })
   },
 
+  // Delete an entry
   deleteEntry(id) {
     return journalRequest(`${encodeURIComponent(id)}/`, {
       method: "DELETE",

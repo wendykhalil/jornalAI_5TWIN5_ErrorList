@@ -36,6 +36,7 @@ import {
   Cell,
 } from "recharts"
 import { useStore } from "../../store/AppStore"
+import { journalService } from "../../services/journalService"
 import {
   Badge,
   Button,
@@ -169,30 +170,83 @@ function EntryForm({ item }) {
 }
 
 export function JournalPage({ mode = "list" }) {
-  const {
-    journals, journalsLoading, refreshJournals, updateJournal,
-    deleteJournal, notify,
-  } = useStore()
+  const { journals, journalsLoading, getJournal, updateJournal, deleteJournal, notify } = useStore()
   const nav = useNavigate()
   const { id } = useParams()
+
   const [q, setQ] = useState("")
-  const [sort, setSort] = useState("new")
+  const [debouncedQ, setDebouncedQ] = useState("")
+  const [sort, setSort] = useState("-date")
+  const [mood, setMood] = useState("")
+  const [status, setStatus] = useState("all")
+  const [dateFrom, setDateFrom] = useState("")
+  const [dateTo, setDateTo] = useState("")
+  const [page, setPage] = useState(1)
+  const pageSize = 10
+  const [results, setResults] = useState([])
+  const [count, setCount] = useState(0)
+  const [listLoading, setListLoading] = useState(false)
+  const [listError, setListError] = useState("")
+  const [revision, setRevision] = useState(0)
+  const [detail, setDetail] = useState(null)
+  const [detailLoading, setDetailLoading] = useState(false)
   const [confirm, setConfirm] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
-  const item = journals.find((x) => String(x.id) === String(id))
 
-  // Entries are loaded by AppStore after authentication. Refresh if a
-  // detail/edit URL is opened directly and the list has not loaded yet.
   useEffect(() => {
-    if (mode !== "list" && mode !== "new" && id && !item && !journalsLoading) {
-      refreshJournals().catch((err) => setError(err.message))
-    }
+    const timer = setTimeout(() => setDebouncedQ(q.trim()), 350)
+    return () => clearTimeout(timer)
+  }, [q])
+
+  useEffect(() => {
+    if (mode !== "list") return
+    let active = true
+    setListLoading(true)
+    setListError("")
+    const filters = { page, page_size: pageSize, search: debouncedQ, ordering: sort,
+      mood, date_from: dateFrom, date_to: dateTo }
+    if (status === "favorite") filters.favorite = true
+    if (status === "draft") filters.draft = true
+    if (status === "published") filters.draft = false
+    journalService.getEntries(filters)
+      .then((response) => {
+        if (!active) return
+        if (Array.isArray(response)) {
+          setResults(response.slice((page - 1) * pageSize, page * pageSize))
+          setCount(response.length)
+        } else {
+          setResults(response.results || [])
+          setCount(response.count || 0)
+        }
+      })
+      .catch((err) => { if (active) setListError(err.message || "Erreur de chargement") })
+      .finally(() => { if (active) setListLoading(false) })
+    return () => { active = false }
+  }, [mode, page, debouncedQ, sort, mood, status, dateFrom, dateTo, revision])
+
+  useEffect(() => {
+    if ((mode !== "detail" && mode !== "edit") || !id) return
+    let active = true
+    setDetail(null)
+    setDetailLoading(true)
+    setError("")
+    getJournal(id)
+      .then((entry) => { if (active) setDetail(entry) })
+      .catch((err) => { if (active) setError(err.message || "Entrée introuvable") })
+      .finally(() => { if (active) setDetailLoading(false) })
+    return () => { active = false }
   }, [id, mode])
+
+  const item = detail || journals.find((x) => String(x.id) === String(id))
+  const resetPage = () => setPage(1)
+  const totalPages = Math.max(1, Math.ceil(count / pageSize))
 
   const toggleFavorite = async (entry) => {
     try {
       await updateJournal(entry.id, { favorite: !entry.favorite })
+      setResults((prev) => prev.map((x) => x.id === entry.id ? { ...x, favorite: !entry.favorite } : x))
+      if (status === "favorite") setRevision((n) => n + 1)
     } catch (err) {
       notify(err.message || "Impossible de modifier le favori", "error")
     }
@@ -210,19 +264,19 @@ export function JournalPage({ mode = "list" }) {
     } catch (err) {
       setError(err.message || "Impossible de supprimer l’entrée")
       notify("Échec de la suppression", "error")
-    } finally {
-      setBusy(false)
-    }
+    } finally { setBusy(false) }
   }
 
   if (mode === "new") return <EntryForm />
   if (mode === "edit") {
-    if (journalsLoading && !item) return <p>Chargement de l’entrée...</p>
+    if (detailLoading) return <p>Chargement de l’entrée...</p>
+    if (error) return <p role="alert" className="text-red-600">{error}</p>
     if (!item) return <Empty title="Entrée introuvable" />
     return <EntryForm key={item.id} item={item} />
   }
   if (mode === "detail") {
-    if (journalsLoading && !item) return <p>Chargement de l’entrée...</p>
+    if (detailLoading) return <p>Chargement de l’entrée...</p>
+    if (error && !item) return <p role="alert" className="text-red-600">{error}</p>
     if (!item) return <Empty title="Entrée introuvable" />
     return (
       <>
@@ -243,75 +297,76 @@ export function JournalPage({ mode = "list" }) {
             <p className="whitespace-pre-line leading-8 text-slate-700">{item.content}</p>
             <div className="mt-8 rounded-2xl border border-cyan-100 bg-cyan-50 p-5">
               <div className="font-extrabold text-cyan-900">Résumé et thèmes suggérés par l’IA</div>
-              <p className="mt-2 text-sm text-cyan-800">
-                Cette entrée évoque la progression personnelle, l’apprentissage et la gratitude.
-              </p>
-              <p className="mt-2 text-xs text-cyan-700">
-                Simulation de démonstration — ce résultat n’est pas une analyse réelle.
-              </p>
+              <p className="mt-2 text-sm text-cyan-800">Cette entrée évoque la progression personnelle, l’apprentissage et la gratitude.</p>
+              <p className="mt-2 text-xs text-cyan-700">Simulation de démonstration — ce résultat n’est pas une analyse réelle.</p>
             </div>
             <div className="mt-6 flex gap-2">
-              <Link to={`/journal/${item.id}/edit`}>
-                <Button variant="secondary"><Edit3 size={16} /> Modifier</Button>
-              </Link>
-              <Button variant="danger" onClick={() => setConfirm(true)}>
-                <Trash2 size={16} /> Supprimer
-              </Button>
+              <Link to={`/journal/${item.id}/edit`}><Button variant="secondary"><Edit3 size={16} /> Modifier</Button></Link>
+              <Button variant="danger" onClick={() => setConfirm(true)}><Trash2 size={16} /> Supprimer</Button>
             </div>
             {error && <p className="mt-3 text-sm text-red-600" role="alert">{error}</p>}
           </div>
         </Card>
-        <Modal open={confirm} onClose={() => !busy && setConfirm(false)}
-          title="Supprimer cette entrée?" actions={<>
-            <Button variant="secondary" disabled={busy} onClick={() => setConfirm(false)}>Annuler</Button>
-            <Button variant="danger" disabled={busy} onClick={removeEntry}>
-              {busy ? "Suppression..." : "Confirmer"}
-            </Button>
-          </>}>
+        <Modal open={confirm} onClose={() => !busy && setConfirm(false)} title="Supprimer cette entrée?" actions={<>
+          <Button variant="secondary" disabled={busy} onClick={() => setConfirm(false)}>Annuler</Button>
+          <Button variant="danger" disabled={busy} onClick={removeEntry}>{busy ? "Suppression..." : "Confirmer"}</Button>
+        </>}>
           Cette action supprimera définitivement « {item.title} » de votre journal.
         </Modal>
       </>
     )
   }
 
-  const list = [...journals]
-    .filter((x) => [x.title, x.content, ...(x.tags || [])]
-      .join(" ").toLowerCase().includes(q.toLowerCase()))
-    .sort((a, b) => sort === "title"
-      ? a.title.localeCompare(b.title)
-      : sort === "old" ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date))
-
   return (
     <>
-      <PageHeader title="Mon journal"
-        subtitle="Un espace pour écrire, comprendre et revisiter vos journées."
-        actions={<Link to="/journal/new"><Button><Plus size={17} /> Nouvelle entrée</Button></Link>}
-      />
-      <Card className="mb-5 flex flex-col gap-3 p-4 sm:flex-row">
-        <div className="relative flex-1">
+      <PageHeader title="Mon journal" subtitle="Un espace pour écrire, comprendre et revisiter vos journées."
+        actions={<Link to="/journal/new"><Button><Plus size={17} /> Nouvelle entrée</Button></Link>} />
+      <Card className="mb-5 space-y-3 p-4">
+        <div className="relative">
           <Search className="absolute left-3 top-3 text-slate-400" size={18} />
-          <input value={q} onChange={(e) => setQ(e.target.value)}
+          <input value={q} onChange={(e) => { setQ(e.target.value); resetPage() }}
             className="w-full rounded-xl border border-slate-200 py-2.5 pl-10 pr-3 outline-none focus:ring-4 focus:ring-violet-100"
-            placeholder="Rechercher dans le journal..." />
+            placeholder="Recherche dynamique : titre, contenu, tags..." aria-label="Rechercher" />
         </div>
-        <Select value={sort} onChange={(e) => setSort(e.target.value)}>
-          <option value="new">Plus récent</option>
-          <option value="old">Plus ancien</option>
-          <option value="title">Titre A–Z</option>
-        </Select>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <Select value={sort} onChange={(e) => { setSort(e.target.value); resetPage() }}>
+            <option value="-date">Plus récent</option>
+            <option value="date">Plus ancien</option>
+            <option value="title">Titre A–Z</option>
+            <option value="-title">Titre Z–A</option>
+          </Select>
+          <Select value={mood} onChange={(e) => { setMood(e.target.value); resetPage() }}>
+            <option value="">Toutes les humeurs</option>
+            {Object.keys(moodColors).map((x) => <option key={x} value={x}>{x}</option>)}
+          </Select>
+          <Select value={status} onChange={(e) => { setStatus(e.target.value); resetPage() }}>
+            <option value="all">Toutes les entrées</option>
+            <option value="favorite">Favoris</option>
+            <option value="draft">Brouillons</option>
+            <option value="published">Publiées</option>
+          </Select>
+          <Button variant="secondary" onClick={() => {
+            setQ(""); setDebouncedQ(""); setSort("-date"); setMood(""); setStatus("all");
+            setDateFrom(""); setDateTo(""); setPage(1)
+          }}>Réinitialiser les filtres</Button>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Input label="Date de début" type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); resetPage() }} />
+          <Input label="Date de fin" type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); resetPage() }} />
+        </div>
       </Card>
-      {journalsLoading && !journals.length ? <p>Chargement du journal...</p> :
-        list.length ? <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {list.map((x) => <Card key={x.id} className="group p-5">
+      {listError && <p className="mb-4 text-sm text-red-600" role="alert">{listError}</p>}
+      <p className="mb-3 text-sm text-slate-500">{count} entrée(s) trouvée(s) {listLoading ? "· Recherche en cours..." : ""}</p>
+      {listLoading ? <p>Chargement du journal...</p> : results.length ? (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {results.map((x) => <Card key={x.id} className="group p-5">
             <div className="flex justify-between">
               <div className="flex gap-2">
                 <Badge className="bg-violet-50 text-violet-700">{x.mood}</Badge>
                 {x.draft && <Badge>Brouillon</Badge>}
               </div>
-              <button aria-label={x.favorite ? "Retirer des favoris" : "Ajouter aux favoris"}
-                onClick={() => toggleFavorite(x)}>
-                <Heart size={18} className={x.favorite
-                  ? "fill-rose-500 text-rose-500" : "text-slate-300"} />
+              <button aria-label={x.favorite ? "Retirer des favoris" : "Ajouter aux favoris"} onClick={() => toggleFavorite(x)}>
+                <Heart size={18} className={x.favorite ? "fill-rose-500 text-rose-500" : "text-slate-300"} />
               </button>
             </div>
             <Link to={`/journal/${x.id}`}>
@@ -320,12 +375,18 @@ export function JournalPage({ mode = "list" }) {
             </Link>
             <div className="mt-4 flex items-center gap-2 border-t border-slate-100 pt-4 text-xs text-slate-400">
               <CalendarDays size={14} />{x.date}
-              <div className="ml-auto flex gap-1">
-                {(x.tags || []).slice(0, 2).map((t) => <span key={t}>#{t}</span>)}
-              </div>
+              <div className="ml-auto flex gap-1">{(x.tags || []).slice(0, 2).map((t) => <span key={t}>#{t}</span>)}</div>
             </div>
           </Card>)}
-        </div> : <Empty title="Aucune entrée dans votre journal" />}
+        </div>
+      ) : <Empty title="Aucune entrée trouvée" />}
+      {count > pageSize && (
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+          <Button variant="secondary" disabled={page <= 1 || listLoading} onClick={() => setPage((n) => n - 1)}>Précédent</Button>
+          <span className="text-sm text-slate-600">Page {page} / {totalPages}</span>
+          <Button variant="secondary" disabled={page >= totalPages || listLoading} onClick={() => setPage((n) => n + 1)}>Suivant</Button>
+        </div>
+      )}
     </>
   )
 }

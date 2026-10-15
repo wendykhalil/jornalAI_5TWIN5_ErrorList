@@ -224,6 +224,17 @@ export function AppStore({ children }) {
     }
   }, [isAuthenticated, user?.id])
 
+  const getJournal = async (id) => {
+    const entry = await journalService.getEntry(id)
+    setJournals((previous) => {
+      const exists = previous.some((x) => String(x.id) === String(id))
+      return exists
+        ? previous.map((x) => String(x.id) === String(id) ? entry : x)
+        : [entry, ...previous]
+    })
+    return entry
+  }
+
   const createJournal = async (data) => {
     const entry = await journalService.createEntry(data)
 
@@ -423,6 +434,7 @@ export function AppStore({ children }) {
       setJournals,
       journalsLoading,
       refreshJournals,
+      getJournal,
       createJournal,
       updateJournal,
       deleteJournal,
