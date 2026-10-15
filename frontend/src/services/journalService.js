@@ -12,6 +12,10 @@ function errorMessage(data, fallback) {
     return data.detail
   }
 
+  if (typeof data?.error === "string") {
+    return data.error
+  }
+
   if (data && typeof data === "object") {
     return Object.entries(data)
       .map(([field, value]) => {
@@ -92,6 +96,10 @@ function buildQueryParams(params = {}) {
 }
 
 export const journalService = {
+  // ==========================================
+  // JOURNAL CRUD
+  // ==========================================
+
   // Get journal entries with search, filters and pagination
   getEntries(params = {}) {
     return journalRequest(buildQueryParams(params))
@@ -125,10 +133,27 @@ export const journalService = {
     })
   },
 
+  // ==========================================
   // JOURNAL ANALYTICS
+  // ==========================================
+
   // Get real statistics from Django + MySQL
   getAnalytics() {
     return journalRequest("analytics/")
+  },
+
+  // ==========================================
+  // REAL AI INTEGRATION — OLLAMA
+  // ==========================================
+
+  // Analyze a journal entry using Llama 3.2
+  analyzeEntry(id) {
+    return journalRequest(
+      `${encodeURIComponent(id)}/analyze/`,
+      {
+        method: "POST",
+      }
+    )
   },
 }
 

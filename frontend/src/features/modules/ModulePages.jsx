@@ -180,6 +180,12 @@ export function JournalPage({ mode = "list" }) {
   const [analyticsError, setAnalyticsError] = useState("")
   const [analyticsRevision, setAnalyticsRevision] = useState(0)
 
+  // Real AI analysis for the currently selected journal entry
+  const [aiAnalysis, setAiAnalysis] = useState(null)
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiError, setAiError] = useState("")
+
+
   useEffect(() => {
     if (mode !== "list" || !showAnalytics) return
     let active = true
@@ -256,6 +262,28 @@ export function JournalPage({ mode = "list" }) {
     return () => { active = false }
   }, [id, mode])
 
+  useEffect(() => {
+    setAiAnalysis(null)
+    setAiError("")
+    setAiLoading(false)
+  }, [id])
+
+  const analyzeJournal = async () => {
+    if (!id || aiLoading) return
+    setAiLoading(true)
+    setAiError("")
+    setAiAnalysis(null)
+    try {
+      const response = await journalService.analyzeEntry(id)
+      if (!response?.analysis) throw new Error("Réponse IA invalide.")
+      setAiAnalysis(response.analysis)
+    } catch (err) {
+      setAiError(err.message || "Impossible d'analyser cette entrée.")
+    } finally {
+      setAiLoading(false)
+    }
+  }
+
   const item = detail || journals.find((x) => String(x.id) === String(id))
   const resetPage = () => setPage(1)
   const totalPages = Math.max(1, Math.ceil(count / pageSize))
@@ -315,9 +343,33 @@ export function JournalPage({ mode = "list" }) {
           <div className="p-7">
             <p className="whitespace-pre-line leading-8 text-slate-700">{item.content}</p>
             <div className="mt-8 rounded-2xl border border-cyan-100 bg-cyan-50 p-5">
-              <div className="font-extrabold text-cyan-900">Résumé et thèmes suggérés par l’IA</div>
-              <p className="mt-2 text-sm text-cyan-800">Cette entrée évoque la progression personnelle, l’apprentissage et la gratitude.</p>
-              <p className="mt-2 text-xs text-cyan-700">Simulation de démonstration — ce résultat n’est pas une analyse réelle.</p>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-extrabold text-cyan-900">Analyse IA de votre journal</h2>
+                  <p className="mt-1 text-xs text-cyan-700">Analyse locale avec Llama 3.2 · Les émotions détectées sont des suggestions, pas un diagnostic.</p>
+                </div>
+                <Button variant="ai" disabled={aiLoading || !item.content?.trim()} onClick={analyzeJournal}>
+                  <Sparkles size={16} /> {aiLoading ? "Analyse en cours..." : aiAnalysis ? "Relancer l'analyse IA" : "Analyser avec l'IA"}
+                </Button>
+              </div>
+              {aiLoading && <p className="mt-4 text-sm text-cyan-800" role="status">Llama 3.2 analyse votre entrée. Cela peut prendre quelques secondes...</p>}
+              {aiError && <p className="mt-4 text-sm text-red-600" role="alert">{aiError}</p>}
+              {aiAnalysis && !aiLoading && (
+                <div className="mt-4 space-y-3 text-sm text-cyan-950">
+                  <p><strong>Émotion principale :</strong> {aiAnalysis.primary_emotion}</p>
+                  <div>
+                    <strong>Émotions secondaires :</strong>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(aiAnalysis.secondary_emotions || []).length
+                        ? aiAnalysis.secondary_emotions.map((emotion, index) => <Badge key={`${emotion}-${index}`} className="bg-white text-cyan-800">{emotion}</Badge>)
+                        : <span className="ml-2">Aucune identifiée</span>}
+                    </div>
+                  </div>
+                  <p><strong>Résumé :</strong> {aiAnalysis.summary}</p>
+                  <p><strong>Observation :</strong> {aiAnalysis.insight}</p>
+                  <p><strong>Question de réflexion :</strong> {aiAnalysis.reflection_question}</p>
+                </div>
+              )}
             </div>
             <div className="mt-6 flex gap-2">
               <Link to={`/journal/${item.id}/edit`}><Button variant="secondary"><Edit3 size={16} /> Modifier</Button></Link>
