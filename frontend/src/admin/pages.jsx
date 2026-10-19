@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react"
+import AdminJournalPage from "./AdminJournalPage.jsx"
 import { Link, Navigate, useNavigate, useParams } from "react-router"
 import {
   Users,
@@ -1323,6 +1324,14 @@ const resourceConfigs = {
 }
 
 export function ResourcePage({ type }) {
+  if (type === "journal") {
+    return <AdminJournalPage />
+  }
+
+  return <OtherResourcePage type={type} />
+}
+
+function OtherResourcePage({ type }) {
   const config = resourceConfigs[type]
   const [query, setQuery] = useState("")
   const rows = config
