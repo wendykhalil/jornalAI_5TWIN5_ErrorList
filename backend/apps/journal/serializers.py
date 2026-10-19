@@ -6,21 +6,48 @@ from apps.media.models import Media
 from .models import JournalEntry
 
 
+class JournalAttachmentSerializer(serializers.ModelSerializer):
+    file_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Media
+        fields = [
+            "id",
+            "title",
+            "description",
+            "media_type",
+            "file_url",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_file_url(self, obj):
+        if not obj.file:
+            return None
+
+        request = self.context.get("request")
+        url = obj.file.url
+
+        return request.build_absolute_uri(url) if request else url
+
+
 class JournalEntrySerializer(serializers.ModelSerializer):
-
-    # ==========================================
-    # PHOTO AND VIDEO ATTACHMENTS
-    # ==========================================
-
     images = serializers.PrimaryKeyRelatedField(
         many=True,
         queryset=Media.objects.all(),
-        required=False
+        required=False,
     )
+
+    attachments = JournalAttachmentSerializer(
+        source="images",
+        many=True,
+        read_only=True,
+    )
+
+    author = serializers.SerializerMethodField()
 
     class Meta:
         model = JournalEntry
-
         fields = [
             "id",
             "title",
@@ -29,6 +56,8 @@ class JournalEntrySerializer(serializers.ModelSerializer):
             "mood",
             "tags",
             "images",
+            "attachments",
+            "author",
             "favorite",
             "draft",
             "created_at",
@@ -37,13 +66,38 @@ class JournalEntrySerializer(serializers.ModelSerializer):
 
         read_only_fields = [
             "id",
+            "attachments",
+            "author",
             "created_at",
             "updated_at",
         ]
 
-    # ==========================================
-    # ATTACHMENT SECURITY
-    # ==========================================
+    def get_author(self, obj):
+        request = self.context.get("request")
+
+        # Do not expose another user's identity through
+        # ordinary journal endpoints.
+        if not request or not request.user.is_authenticated:
+            return None
+
+        if (
+            request.user.pk != obj.user_id
+            and not (
+                getattr(request.user, "role", None) == "admin"
+                or request.user.is_superuser
+            )
+        ):
+            return None
+
+        user = obj.user
+
+        return {
+            "id": user.pk,
+            "username": user.username,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "email": user.email,
+        }
 
     def validate_images(self, value):
         request = self.context.get("request")
@@ -58,27 +112,17 @@ class JournalEntrySerializer(serializers.ModelSerializer):
             )
 
         for media in value:
-
-            # Only attach your own files
             if media.user_id != request.user.pk:
                 raise serializers.ValidationError(
                     "You cannot attach another user's media."
                 )
 
-            # Only photos and videos
-            if media.media_type not in [
-                "image",
-                "video",
-            ]:
+            if media.media_type not in ["image", "video"]:
                 raise serializers.ValidationError(
                     "Only images and videos are allowed."
                 )
 
         return value
-
-    # ==========================================
-    # TITLE VALIDATION
-    # ==========================================
 
     def validate_title(self, value):
         value = value.strip()
@@ -100,16 +144,8 @@ class JournalEntrySerializer(serializers.ModelSerializer):
 
         return value
 
-    # ==========================================
-    # CONTENT VALIDATION
-    # ==========================================
-
     def validate_content(self, value):
         return value.strip()
-
-    # ==========================================
-    # DATE VALIDATION
-    # ==========================================
 
     def validate_date(self, value):
         if value > timezone.localdate():
@@ -118,10 +154,6 @@ class JournalEntrySerializer(serializers.ModelSerializer):
             )
 
         return value
-
-    # ==========================================
-    # MOOD VALIDATION
-    # ==========================================
 
     def validate_mood(self, value):
         value = value.strip()
@@ -138,10 +170,6 @@ class JournalEntrySerializer(serializers.ModelSerializer):
 
         return value
 
-    # ==========================================
-    # TAG VALIDATION
-    # ==========================================
-
     def validate_tags(self, value):
         if not isinstance(value, list):
             raise serializers.ValidationError(
@@ -156,7 +184,6 @@ class JournalEntrySerializer(serializers.ModelSerializer):
         cleaned_tags = []
 
         for tag in value:
-
             if not isinstance(tag, str):
                 raise serializers.ValidationError(
                     "All tags must be strings."
@@ -186,32 +213,22 @@ class JournalEntrySerializer(serializers.ModelSerializer):
 
         return cleaned_tags
 
-    # ==========================================
-    # DRAFT / PUBLISHED VALIDATION
-    # ==========================================
-
     def validate(self, attrs):
         attrs = super().validate(attrs)
 
         draft = attrs.get(
             "draft",
-            self.instance.draft
-            if self.instance
-            else False
+            self.instance.draft if self.instance else False,
         )
 
         content = attrs.get(
             "content",
-            self.instance.content
-            if self.instance
-            else ""
+            self.instance.content if self.instance else "",
         )
 
         if not draft and not content.strip():
             raise serializers.ValidationError({
-                "content": (
-                    "Content is required for published entries."
-                )
+                "content": "Content is required for published entries."
             })
 
         return attrs
