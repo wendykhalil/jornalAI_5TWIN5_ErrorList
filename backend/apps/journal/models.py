@@ -1,3 +1,4 @@
+
 from django.conf import settings
 from django.db import models
 import uuid
@@ -27,7 +28,17 @@ class JournalEntry(models.Model):
         default="Calme"
     )
 
-    tags = models.JSONField(default=list, blank=True)
+    tags = models.JSONField(
+        default=list,
+        blank=True
+    )
+
+    # Photos attached to this journal entry
+    images = models.ManyToManyField(
+        "media.Media",
+        blank=True,
+        related_name="journal_entries"
+    )
 
     favorite = models.BooleanField(default=False)
 

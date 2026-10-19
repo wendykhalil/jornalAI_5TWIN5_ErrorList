@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect } from "react"
+import { mediaPhotoService } from "../../services/mediaPhotoService"
 import { Link, useNavigate, useParams } from "react-router"
 import {
   Plus,
@@ -62,33 +63,92 @@ const moodColors = {
   Triste: "#3b82f6",
   Anxieux: "#ef4444",
 }
+function JournalPhotos({ ids = [] }) {
+  const [attachments, setAttachments] = useState([])
+  const key = JSON.stringify(ids)
+  useEffect(() => {
+    let active = true
+    if (!ids.length) { setAttachments([]); return }
+    mediaPhotoService.getAttachments()
+      .then((items) => { if (active) setAttachments(items.filter((m) => ids.includes(m.id))) })
+      .catch(() => { if (active) setAttachments([]) })
+    return () => { active = false }
+  }, [key])
+  if (!attachments.length) return null
+  return <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
+    {attachments.map((file) => <div key={file.id} className="overflow-hidden rounded-xl border border-slate-100">
+      {file.media_type === "video"
+        ? <video src={file.url || file.file} controls preload="metadata" className="aspect-square w-full bg-black object-contain" />
+        : <img src={file.url || file.file} alt={file.title} className="aspect-square w-full object-cover" />}
+      {file.description && <p className="p-2 text-xs text-slate-600">{file.description}</p>}
+    </div>)}
+  </div>
+}
+
 function EntryForm({ item }) {
-  const { createJournal, updateJournal, media, notify } = useStore()
+  const { createJournal, updateJournal, notify } = useStore()
   const nav = useNavigate()
   const [form, setForm] = useState(() => item || {
     title: "", content: "", date: new Date().toLocaleDateString("en-CA"),
     mood: "Calme", tags: [], favorite: false, draft: false,
   })
   const [tagText, setTagText] = useState(() => (item?.tags || []).join(", "))
+  const [selectedIds, setSelectedIds] = useState(() => item?.images || [])
+  const [availablePhotos, setAvailablePhotos] = useState([])
+  const [mediaLoading, setMediaLoading] = useState(true)
+  const [newFiles, setNewFiles] = useState([])
   const [ai, setAi] = useState(null)
   const [aiBusy, setAiBusy] = useState(false)
   const [aiError, setAiError] = useState("")
   const [error, setError] = useState("")
   const [saving, setSaving] = useState(false)
 
+  useEffect(() => {
+    let active = true
+    mediaPhotoService.getAttachments().then((photos) => {
+      if (active) setAvailablePhotos(photos)
+    }).catch((err) => {
+      if (active) setError(err.message || "Impossible de charger les médias.")
+    }).finally(() => {
+      if (active) setMediaLoading(false)
+    })
+    return () => { active = false }
+  }, [])
+
   const save = async (draft = false) => {
-    if (!form.title.trim() || !form.content.trim()) {
-      setError("Le titre et le contenu sont requis.")
+    if (form.title.trim().length < 3 || (!draft && !form.content.trim())) {
+      setError("Titre : minimum 3 caractères. Contenu requis sauf pour un brouillon.")
       return
     }
     setSaving(true)
     setError("")
-    const payload = {
-      title: form.title.trim(), content: form.content.trim(), date: form.date,
-      mood: form.mood, favorite: form.favorite, draft,
-      tags: tagText.split(",").map((x) => x.trim()).filter(Boolean),
-    }
     try {
+      // Ensure every selected attachment is still available to this account.
+      const beforeUpload = await mediaPhotoService.getAttachments()
+      const permittedIds = new Set(beforeUpload.map((m) => String(m.id)))
+      const missing = selectedIds.filter((id) => !permittedIds.has(String(id)))
+      if (missing.length) {
+        throw new Error("Certains médias sélectionnés ne sont plus accessibles. Retirez-les puis réessayez : " + missing.join(", "))
+      }
+      const uploaded = []
+      for (const file of newFiles) {
+        const photo = await mediaPhotoService.uploadAttachment(file)
+        uploaded.push(photo.id)
+      }
+      // Confirm each uploaded UUID is visible through the authenticated media API.
+      if (uploaded.length) {
+        const visible = await mediaPhotoService.getAttachments()
+        const visibleIds = new Set(visible.map((m) => m.id))
+        if (uploaded.some((id) => !visibleIds.has(id))) {
+          throw new Error("Média envoyé mais introuvable dans votre bibliothèque. Vérifiez que les deux API utilisent la même base et le même utilisateur.")
+        }
+      }
+      const payload = {
+        title: form.title.trim(), content: form.content.trim(), date: form.date,
+        mood: form.mood, favorite: form.favorite, draft,
+        tags: tagText.split(",").map((x) => x.trim()).filter(Boolean),
+        images: [...new Set([...selectedIds, ...uploaded])],
+      }
       const saved = item
         ? await updateJournal(item.id, payload)
         : await createJournal(payload)
@@ -97,86 +157,113 @@ function EntryForm({ item }) {
     } catch (err) {
       setError(err.message || "Impossible d’enregistrer l’entrée.")
       notify("Échec de l’enregistrement", "error")
-    } finally {
-      setSaving(false)
-    }
+    } finally { setSaving(false) }
   }
 
-  return (
-    <>
-      <PageHeader
-        title={item ? "Modifier l’entrée" : "Nouvelle entrée"}
-        subtitle="Écrivez librement. Vos entrées sont enregistrées dans votre journal personnel."
-      />
-      <div className="grid gap-6 xl:grid-cols-[1fr_340px]">
-        <Card className="space-y-5 p-6">
-          <Input label="Titre" placeholder="Donnez un titre à cette journée"
-            value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-          <Textarea label="Votre histoire" rows={12}
-            placeholder="Qu’avez-vous envie de retenir ?" value={form.content}
-            onChange={(e) => setForm({ ...form, content: e.target.value })} />
-          <div className="grid gap-4 sm:grid-cols-3">
-            <Input label="Date" type="date" value={form.date}
-              onChange={(e) => setForm({ ...form, date: e.target.value })} />
-            <Select label="Humeur" value={form.mood}
-              onChange={(e) => setForm({ ...form, mood: e.target.value })}>
-              {Object.keys(moodColors).map((x) => <option key={x}>{x}</option>)}
-            </Select>
-            <Input label="Tags (séparés par des virgules)" value={tagText}
-              onChange={(e) => setTagText(e.target.value)} />
-          </div>
-          {error && <p className="text-sm text-red-600" role="alert">{error}</p>}
-          <div className="flex flex-wrap gap-2">
-            <Button disabled={saving} onClick={() => save(false)}>
-              {saving ? "Enregistrement..." : "Enregistrer l’entrée"}
-            </Button>
-            <Button disabled={saving} variant="secondary" onClick={() => save(true)}>
-              Enregistrer le brouillon
-            </Button>
-            <Button disabled={saving} variant="ghost" onClick={() => nav("/journal")}>
-              Annuler
-            </Button>
-          </div>
-        </Card>
-        <div className="space-y-5">
-          <Card className="p-5">
-            <SectionTitle title="Assistant d’écriture IA" subtitle="Améliorez votre texte sans modifier votre brouillon automatiquement." />
-            <Button variant="ai" className="w-full" disabled={aiBusy || !form.content.trim()}
-              onClick={async () => {
-                setAiBusy(true); setAiError(""); setAi(null)
-                try {
-                  const data = await journalService.improveText(form.content)
-                  if (!data?.improved_text) throw new Error("Réponse IA invalide")
-                  setAi({ improved: data.improved_text, original: form.content })
-                } catch (err) { setAiError(err.message || "Erreur de l’assistant IA") }
-                finally { setAiBusy(false) }
-              }}>
-              <Sparkles size={16} /> {aiBusy ? "Amélioration en cours..." : "Améliorer mon texte"}
-            </Button>
-            {aiError && <p role="alert" className="mt-3 text-sm text-red-600">{aiError}</p>}
-            {ai && <div className="mt-4 space-y-3 text-sm">
-              <p className="font-bold">Proposition de l’IA :</p>
-              <p className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-xl bg-violet-50 p-3">{ai.improved}</p>
-              {form.content !== ai.original && <p className="text-amber-700">Votre texte a changé depuis cette suggestion. Vérifiez avant d’appliquer.</p>}
-              <div className="flex flex-wrap gap-2">
-                <Button variant="secondary" onClick={() => { setForm((prev) => ({ ...prev, content: ai.improved })); setAi(null) }}>Appliquer</Button>
-                <Button variant="ghost" onClick={() => setAi(null)}>Ignorer</Button>
-              </div>
-            </div>}
-          </Card>
-          <Card className="p-5">
-            <SectionTitle title="Média lié" />
-            <div className="grid grid-cols-3 gap-2">
-              {media.filter((x) => x.url).slice(0, 3).map((x) => (
-                <img key={x.id} src={x.url} alt={x.title}
-                  className="aspect-square rounded-lg object-cover" />
-              ))}
-            </div>
-          </Card>
+  return <>
+    <PageHeader title={item ? "Modifier l’entrée" : "Nouvelle entrée"}
+      subtitle="Écrivez librement. Vos entrées sont enregistrées dans votre journal personnel." />
+    <div className="grid gap-6 xl:grid-cols-[1fr_340px]">
+      <Card className="space-y-5 p-6">
+        <Input label="Titre" placeholder="Donnez un titre à cette journée" value={form.title}
+          onChange={(e) => setForm({ ...form, title: e.target.value })} />
+        <Textarea label="Votre histoire" rows={12} placeholder="Qu’avez-vous envie de retenir ?"
+          value={form.content} onChange={(e) => setForm({ ...form, content: e.target.value })} />
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Input label="Date" type="date" value={form.date}
+            onChange={(e) => setForm({ ...form, date: e.target.value })} />
+          <Select label="Humeur" value={form.mood}
+            onChange={(e) => setForm({ ...form, mood: e.target.value })}>
+            {Object.keys(moodColors).map((x) => <option key={x}>{x}</option>)}
+          </Select>
+          <Input label="Tags (séparés par des virgules)" value={tagText}
+            onChange={(e) => setTagText(e.target.value)} />
         </div>
+        <div className="rounded-xl border border-slate-200 p-4">
+          <label className="mb-3 block text-sm font-bold">Photos et vidéos de cette entrée</label>
+          <input type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm"
+            multiple disabled={saving} className="block w-full text-sm"
+            onChange={(e) => {
+              const files = Array.from(e.target.files || [])
+              const validTypes = ["image/jpeg", "image/png", "image/webp", "image/gif", "video/mp4", "video/webm"]
+              if (files.some((f) => !validTypes.includes(f.type) || f.size > (f.type.startsWith("video/") ? 100 : 10) * 1024 * 1024)) {
+                setError("Formats : JPG, PNG, WEBP, GIF, MP4, WEBM. Maximum 10 Mo/image ou 100 Mo/vidéo.")
+                e.target.value = ""
+                return
+              }
+              setError("")
+              setNewFiles((prev) => [...prev, ...files]); e.target.value = ""
+            }} />
+          {newFiles.length > 0 && <div className="mt-3 space-y-2">
+            {newFiles.map((file, index) => <div key={`${file.name}-${index}`}
+              className="flex items-center justify-between gap-2 text-sm">
+              <span className="truncate">{file.name} {file.type.startsWith("video/") ? "🎬" : "📷"}</span>
+              <button type="button" className="text-red-600" disabled={saving}
+                onClick={() => setNewFiles((prev) => prev.filter((_, i) => i !== index))}>Retirer</button>
+            </div>)}
+          </div>}
+          {mediaLoading && <p className="mt-3 text-xs text-slate-500">Chargement des médias...</p>}
+          {selectedIds.length > 0 && <div className="mt-3 flex items-center justify-between rounded-lg bg-violet-50 p-2 text-sm">
+            <span>{selectedIds.length} média(s) sélectionné(s)</span>
+            <button type="button" disabled={saving} className="font-semibold text-red-600" onClick={() => setSelectedIds([])}>Tout retirer</button>
+          </div>}
+          {availablePhotos.length > 0 && <>
+            <p className="mt-4 mb-2 text-sm font-semibold">Choisir aussi dans ma bibliothèque (cliquer pour ajouter ou retirer)</p>
+            <div className="grid grid-cols-3 gap-2">
+              {availablePhotos.map((photo) => {
+                const selected = selectedIds.includes(photo.id)
+                return <div key={photo.id} className={`relative overflow-hidden rounded-lg border-2 ${selected ? "border-violet-600" : "border-slate-200"}`}>
+                  <button type="button" disabled={saving} aria-label={selected ? `Retirer ${photo.title}` : `Sélectionner ${photo.title}`}
+                    onClick={() => setSelectedIds((prev) => selected ? prev.filter((id) => id !== photo.id) : [...prev, photo.id])}
+                    className="block w-full text-left">
+                    {photo.media_type === "video"
+                      ? <video src={photo.url || photo.file} muted preload="metadata" className="aspect-square w-full bg-black object-cover pointer-events-none" />
+                      : <img src={photo.url || photo.file} alt={photo.title} className="aspect-square w-full object-cover" />}
+                    <span className={`block p-2 text-center text-xs font-bold ${selected ? "text-red-600" : "text-violet-600"}`}>{selected ? "Retirer" : "Ajouter"}</span>
+                  </button>
+                </div>
+              })}
+            </div>
+          </>}
+        </div>
+        {error && <p className="text-sm text-red-600" role="alert">{error}</p>}
+        <div className="flex flex-wrap gap-2">
+          <Button disabled={saving} onClick={() => save(false)}>{saving ? "Enregistrement..." : "Enregistrer l’entrée"}</Button>
+          <Button disabled={saving} variant="secondary" onClick={() => save(true)}>Enregistrer le brouillon</Button>
+          <Button disabled={saving} variant="ghost" onClick={() => nav("/journal")}>Annuler</Button>
+        </div>
+      </Card>
+      <div className="space-y-5">
+        <Card className="p-5">
+          <SectionTitle title="Assistant d’écriture IA" subtitle="Améliorez votre texte sans modifier votre brouillon automatiquement." />
+          <Button variant="ai" className="w-full" disabled={aiBusy || !form.content.trim()}
+            onClick={async () => {
+              setAiBusy(true); setAiError(""); setAi(null)
+              try {
+                const data = await journalService.improveText(form.content)
+                if (!data?.improved_text) throw new Error("Réponse IA invalide")
+                setAi({ improved: data.improved_text, original: form.content })
+              } catch (err) { setAiError(err.message || "Erreur de l’assistant IA") }
+              finally { setAiBusy(false) }
+            }}><Sparkles size={16} /> {aiBusy ? "Amélioration en cours..." : "Améliorer mon texte"}</Button>
+          {aiError && <p role="alert" className="mt-3 text-sm text-red-600">{aiError}</p>}
+          {ai && <div className="mt-4 space-y-3 text-sm">
+            <p className="font-bold">Proposition de l’IA :</p>
+            <p className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-xl bg-violet-50 p-3">{ai.improved}</p>
+            {form.content !== ai.original && <p className="text-amber-700">Votre texte a changé depuis cette suggestion. Vérifiez avant d’appliquer.</p>}
+            <div className="flex flex-wrap gap-2">
+              <Button variant="secondary" onClick={() => { setForm((prev) => ({ ...prev, content: ai.improved })); setAi(null) }}>Appliquer</Button>
+              <Button variant="ghost" onClick={() => setAi(null)}>Ignorer</Button>
+            </div>
+          </div>}
+        </Card>
+        <Card className="p-5"><SectionTitle title="Photos et vidéos sélectionnées" />
+          <JournalPhotos ids={selectedIds} />
+          <p className="mt-2 text-xs text-slate-500">Les nouveaux fichiers seront envoyés lors de l’enregistrement.</p>
+        </Card>
       </div>
-    </>
-  )
+    </div>
+  </>
 }
 
 export function JournalPage({ mode = "list" }) {
@@ -369,6 +456,7 @@ export function JournalPage({ mode = "list" }) {
           </div>
           <div className="p-7">
             <p className="whitespace-pre-line leading-8 text-slate-700">{item.content}</p>
+            <JournalPhotos ids={item.images || []} />
             <div className="mt-8 rounded-2xl border border-cyan-100 bg-cyan-50 p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>

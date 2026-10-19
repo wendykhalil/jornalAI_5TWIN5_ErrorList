@@ -2,12 +2,25 @@
 from django.utils import timezone
 from rest_framework import serializers
 
+from apps.media.models import Media
 from .models import JournalEntry
 
 
 class JournalEntrySerializer(serializers.ModelSerializer):
+
+    # ==========================================
+    # PHOTO AND VIDEO ATTACHMENTS
+    # ==========================================
+
+    images = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=Media.objects.all(),
+        required=False
+    )
+
     class Meta:
         model = JournalEntry
+
         fields = [
             "id",
             "title",
@@ -15,16 +28,57 @@ class JournalEntrySerializer(serializers.ModelSerializer):
             "date",
             "mood",
             "tags",
+            "images",
             "favorite",
             "draft",
             "created_at",
             "updated_at",
         ]
+
         read_only_fields = [
             "id",
             "created_at",
             "updated_at",
         ]
+
+    # ==========================================
+    # ATTACHMENT SECURITY
+    # ==========================================
+
+    def validate_images(self, value):
+        request = self.context.get("request")
+
+        if (
+            not request
+            or not request.user
+            or not request.user.is_authenticated
+        ):
+            raise serializers.ValidationError(
+                "Authentication required."
+            )
+
+        for media in value:
+
+            # Only attach your own files
+            if media.user_id != request.user.pk:
+                raise serializers.ValidationError(
+                    "You cannot attach another user's media."
+                )
+
+            # Only photos and videos
+            if media.media_type not in [
+                "image",
+                "video",
+            ]:
+                raise serializers.ValidationError(
+                    "Only images and videos are allowed."
+                )
+
+        return value
+
+    # ==========================================
+    # TITLE VALIDATION
+    # ==========================================
 
     def validate_title(self, value):
         value = value.strip()
@@ -46,8 +100,16 @@ class JournalEntrySerializer(serializers.ModelSerializer):
 
         return value
 
+    # ==========================================
+    # CONTENT VALIDATION
+    # ==========================================
+
     def validate_content(self, value):
         return value.strip()
+
+    # ==========================================
+    # DATE VALIDATION
+    # ==========================================
 
     def validate_date(self, value):
         if value > timezone.localdate():
@@ -56,6 +118,10 @@ class JournalEntrySerializer(serializers.ModelSerializer):
             )
 
         return value
+
+    # ==========================================
+    # MOOD VALIDATION
+    # ==========================================
 
     def validate_mood(self, value):
         value = value.strip()
@@ -72,6 +138,10 @@ class JournalEntrySerializer(serializers.ModelSerializer):
 
         return value
 
+    # ==========================================
+    # TAG VALIDATION
+    # ==========================================
+
     def validate_tags(self, value):
         if not isinstance(value, list):
             raise serializers.ValidationError(
@@ -86,6 +156,7 @@ class JournalEntrySerializer(serializers.ModelSerializer):
         cleaned_tags = []
 
         for tag in value:
+
             if not isinstance(tag, str):
                 raise serializers.ValidationError(
                     "All tags must be strings."
@@ -104,7 +175,8 @@ class JournalEntrySerializer(serializers.ModelSerializer):
                 )
 
             if tag.lower() in [
-                existing.lower() for existing in cleaned_tags
+                existing.lower()
+                for existing in cleaned_tags
             ]:
                 raise serializers.ValidationError(
                     "Duplicate tags are not allowed."
@@ -114,17 +186,25 @@ class JournalEntrySerializer(serializers.ModelSerializer):
 
         return cleaned_tags
 
+    # ==========================================
+    # DRAFT / PUBLISHED VALIDATION
+    # ==========================================
+
     def validate(self, attrs):
         attrs = super().validate(attrs)
 
         draft = attrs.get(
             "draft",
-            self.instance.draft if self.instance else False
+            self.instance.draft
+            if self.instance
+            else False
         )
 
         content = attrs.get(
             "content",
-            self.instance.content if self.instance else ""
+            self.instance.content
+            if self.instance
+            else ""
         )
 
         if not draft and not content.strip():
