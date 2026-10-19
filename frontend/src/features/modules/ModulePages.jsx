@@ -39,6 +39,7 @@ import {
 } from "recharts"
 import { useStore } from "../../store/AppStore"
 import { journalService } from "../../services/journalService"
+import { journalVisionService } from "../../services/journalVisionService"
 import {
   Badge,
   Button,
@@ -83,6 +84,66 @@ function JournalPhotos({ ids = [] }) {
       {file.description && <p className="p-2 text-xs text-slate-600">{file.description}</p>}
     </div>)}
   </div>
+}
+
+function JournalVisionPanel({ images = [], busyId, error, result, onAnalyze }) {
+  const [photos, setPhotos] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState("")
+  const idsKey = JSON.stringify(images)
+
+  useEffect(() => {
+    let active = true
+    if (!images.length) { setPhotos([]); return }
+    setLoading(true)
+    setLoadError("")
+    mediaPhotoService.getAttachments()
+      .then((all) => {
+        if (active) setPhotos(all.filter((m) =>
+          images.some((id) => String(id) === String(m.id)) && m.media_type === "image"
+        ))
+      })
+      .catch((err) => { if (active) setLoadError(err.message || "Photos indisponibles") })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [idsKey])
+
+  if (!images.length) return null
+  return (
+    <div className="mt-6 rounded-2xl border border-violet-200 bg-violet-50/60 p-5">
+      <div className="flex items-center gap-2">
+        <Sparkles size={19} className="text-violet-600" />
+        <h2 className="font-extrabold text-violet-900">Analyser une photo avec l'IA</h2>
+      </div>
+      <p className="mt-1 text-xs text-violet-700">Choisissez une photo. L'analyse est facultative et ne modifie pas votre journal.</p>
+      {loading && <p className="mt-3 text-sm">Chargement des photos...</p>}
+      {loadError && <p role="alert" className="mt-3 text-sm text-red-600">{loadError}</p>}
+      {!loading && !loadError && photos.length === 0 && <p className="mt-3 text-sm text-slate-600">Aucune image compatible attachée à cette entrée.</p>}
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 md:grid-cols-3">
+        {photos.map((photo) => (
+          <div key={photo.id} className="overflow-hidden rounded-xl border border-violet-100 bg-white p-2">
+            <img src={photo.url || photo.file} alt={photo.title || "Photo du journal"} className="aspect-video w-full rounded-lg object-cover" />
+            <p className="mt-2 truncate text-xs font-semibold text-slate-700">{photo.title || "Photo"}</p>
+            <Button variant="ai" className="mt-2 w-full" disabled={Boolean(busyId)} onClick={() => onAnalyze(photo.id)}>
+              <Sparkles size={15} /> {String(busyId) === String(photo.id) ? "Analyse en cours..." : "Analyser cette photo"}
+            </Button>
+          </div>
+        ))}
+      </div>
+      {busyId && <p role="status" className="mt-3 text-sm text-violet-700">Llama 3.2 Vision analyse votre photo. Cela peut prendre un moment...</p>}
+      {error && <p role="alert" className="mt-3 text-sm text-red-600">{error}</p>}
+      {result && !busyId && (
+        <div className="mt-4 space-y-3 rounded-xl border border-violet-100 bg-white p-4 text-sm">
+          <p><strong>Description :</strong> {result.description}</p>
+          <div>
+            <strong>Suggestion pour votre journal :</strong>
+            <p className="mt-2 whitespace-pre-wrap rounded-lg bg-slate-50 p-3">{result.journal_suggestion}</p>
+          </div>
+          <p className="text-xs text-slate-500">Texte proposé par l'IA : vérifiez-le avant de l'utiliser. Aucune modification automatique.</p>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function EntryForm({ item }) {
@@ -298,7 +359,25 @@ export function JournalPage({ mode = "list" }) {
   const [aiAnalysis, setAiAnalysis] = useState(null)
   const [aiLoading, setAiLoading] = useState(false)
   const [aiError, setAiError] = useState("")
+  const [photoAnalysis, setPhotoAnalysis] = useState(null)
+  const [photoBusyId, setPhotoBusyId] = useState(null)
+  const [photoError, setPhotoError] = useState("")
 
+  const analyzePhoto = async (mediaId) => {
+    if (!id || photoBusyId) return
+    setPhotoBusyId(String(mediaId))
+    setPhotoError("")
+    setPhotoAnalysis(null)
+    try {
+      const data = await journalVisionService.analyzePhoto(id, mediaId)
+      if (!data?.description || !data?.journal_suggestion) throw new Error("Réponse IA invalide.")
+      setPhotoAnalysis(data)
+    } catch (err) {
+      setPhotoError(err.message || "Impossible d'analyser cette photo.")
+    } finally {
+      setPhotoBusyId(null)
+    }
+  }
 
   useEffect(() => {
     if (mode !== "list" || !showAnalytics) return
@@ -380,6 +459,9 @@ export function JournalPage({ mode = "list" }) {
     setAiAnalysis(null)
     setAiError("")
     setAiLoading(false)
+    setPhotoAnalysis(null)
+    setPhotoError("")
+    setPhotoBusyId(null)
   }, [id])
 
   const analyzeJournal = async () => {
@@ -457,6 +539,13 @@ export function JournalPage({ mode = "list" }) {
           <div className="p-7">
             <p className="whitespace-pre-line leading-8 text-slate-700">{item.content}</p>
             <JournalPhotos ids={item.images || []} />
+            <JournalVisionPanel
+              images={item.images || []}
+              busyId={photoBusyId}
+              error={photoError}
+              result={photoAnalysis}
+              onAnalyze={analyzePhoto}
+            />
             <div className="mt-8 rounded-2xl border border-cyan-100 bg-cyan-50 p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
