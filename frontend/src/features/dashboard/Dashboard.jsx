@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react"
 import { Link } from "react-router"
 import {
   BookOpen,
@@ -24,6 +25,7 @@ import {
   Cell,
 } from "recharts"
 import { useStore } from "../../store/AppStore"
+import { moodService } from "../../services/moodService"
 import {
   Card,
   PageHeader,
@@ -34,14 +36,30 @@ import {
 } from "../../components/ui"
 
 export default function Dashboard() {
-  const { memories, journals, moods, media, goals, habits } = useStore()
-  const chart = moods
-    .slice(0, 7)
-    .reverse()
-    .map((m, i) => ({
-      day: ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"][i],
-      value: m.intensity,
-    }))
+  const { memories, journals, media, goals, habits } = useStore()
+  const [moodStats, setMoodStats] = useState(null)
+  useEffect(() => {
+    let active = true
+    const end = new Date()
+    const start = new Date()
+    start.setDate(end.getDate() - 6)
+    const day = (date) => {
+      const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+      return local.toISOString().slice(0, 10)
+    }
+    moodService.getStats({ date_from: day(start), date_to: day(end) })
+      .then((data) => { if (active) setMoodStats(data) })
+      .catch(() => { if (active) setMoodStats({ count: 0, average_intensity: null, intensity_over_time: [] }) })
+    return () => { active = false }
+  }, [])
+  const chart = (moodStats?.intensity_over_time || []).map((point) => ({
+    day: new Date(point.date).toLocaleDateString("fr-FR", { weekday: "short" }),
+    value: point.intensity,
+  }))
+  const average = moodStats?.average_intensity
+  const averageLabel = average === null || average === undefined
+    ? "—"
+    : `${Number(average).toLocaleString("fr-FR", { maximumFractionDigits: 1 })}/5`
   const activity = Array.from({ length: 8 }, (_, i) => ({
     week: `S${i + 1}`,
     value: 2 + ((i * 3) % 7),
@@ -78,7 +96,7 @@ export default function Dashboard() {
           icon={BookOpen}
           hint="+2 ce mois"
         />
-        <Stat label="Humeur moyenne" value="3,8/5" icon={HeartPulse} />
+        <Stat label="Humeur moyenne" value={averageLabel} icon={HeartPulse} hint="7 derniers jours" />
         <Stat label="Souvenirs" value={memories.length} icon={CalendarHeart} />
         <Stat
           label="Objectifs actifs"
@@ -94,6 +112,11 @@ export default function Dashboard() {
             title="Évolution de votre humeur"
             subtitle="Intensité déclarée sur les 7 derniers jours"
           />
+          {moodStats === null ? (
+            <p className="py-16 text-center text-sm text-slate-500">Chargement des humeurs...</p>
+          ) : chart.length === 0 ? (
+            <p className="py-16 text-center text-sm text-slate-500">Aucune humeur enregistrée sur les 7 derniers jours.</p>
+          ) : (
           <div className="h-64">
             <ResponsiveContainer>
               <AreaChart data={chart}>
@@ -116,6 +139,7 @@ export default function Dashboard() {
               </AreaChart>
             </ResponsiveContainer>
           </div>
+          )}
         </Card>
         <Card className="overflow-hidden bg-slate-950 p-6 text-white">
           <Badge className="bg-cyan-300/15 text-cyan-300">

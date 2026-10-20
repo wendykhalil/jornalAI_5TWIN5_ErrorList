@@ -86,7 +86,7 @@ export function AiInsights() {
 
       "Tendances d’humeur",
 
-      "Votre humeur est plus stable les jours où vous prenez une pause.",
+      "Ouvrez les tendances calculées à partir de vos humeurs et leur synthèse descriptive.",
 
       "/mood/insights",
 

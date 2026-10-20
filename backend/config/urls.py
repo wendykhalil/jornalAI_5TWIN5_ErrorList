@@ -18,6 +18,9 @@ urlpatterns = [
     
     # Media Management API
     path("api/", include("apps.media.urls")),
+
+    # Mood tracking API
+    path("api/", include("apps.mood.urls")),
 ]
 
 # Serve media files in development
