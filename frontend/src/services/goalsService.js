@@ -8,6 +8,7 @@ const API_BASE_URL =
  */
 function errorMessage(data, fallback) {
   if (typeof data?.detail === "string") return data.detail
+  if (typeof data?.error === "string") return data.error
 
   if (data && typeof data === "object") {
     return Object.entries(data)
@@ -98,6 +99,16 @@ export const goalsService = {
       body: body({ date, completed }),
     }),
   listChecks: (id) => request(`/habits/${id}/checks/`),
+
+  // ---- AI (Ollama on the backend) ----
+  // { insights: string[], source: "ai" | "rules", warning?: string }
+  insights: () => request("/goals/insights/"),
+  // { answer: string, sources: [{ type, id, title }] }
+  coach: (question, history = []) =>
+    request("/goals/coach/", {
+      method: "POST",
+      body: body({ question, history }),
+    }),
 }
 
 export default goalsService

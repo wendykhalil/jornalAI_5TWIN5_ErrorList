@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link, useNavigate, useParams } from "react-router"
 import {
   Plus,
@@ -8,6 +8,7 @@ import {
   Flame,
   Target,
   CheckCircle2,
+  Send,
 } from "lucide-react"
 import { useStore } from "../../store/AppStore"
 import { goalsService } from "../../services/goalsService"
@@ -739,102 +740,213 @@ function HabitsView() {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Insights: simple suggestions computed from the real data                   */
+/* AI: insights + RAG coach (served by the backend, Ollama)                   */
 /* -------------------------------------------------------------------------- */
 
-function InsightsView() {
-  const { notify } = useStore()
-  const { habits, loading: loadingHabits } = useHabits()
-  const [goals, setGoals] = useState([])
-  const [loadingGoals, setLoadingGoals] = useState(true)
+const SOURCE_LABELS = { goal: "Objectif", habit: "Habitude", journal: "Journal" }
+
+const STARTERS = [
+  "Où en suis-je sur mes objectifs ?",
+  "Quelle habitude dois-je prioriser ?",
+  "Comment rester motivé(e) cette semaine ?",
+]
+
+function CoachChat() {
+  const [messages, setMessages] = useState([])
+  const [input, setInput] = useState("")
+  const [sending, setSending] = useState(false)
+  const endRef = useRef(null)
 
   useEffect(() => {
-    let active = true
-    goalsService
-      .listGoals()
-      .then((items) => active && setGoals(items))
-      .catch((e) => notify(e.message, "error"))
-      .finally(() => active && setLoadingGoals(false))
-    return () => {
-      active = false
+    endRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" })
+  }, [messages, sending])
+
+  const send = async (text) => {
+    const question = text.trim()
+    if (!question || sending) return
+
+    const history = messages
+      .filter((m) => !m.error)
+      .map(({ role, content }) => ({ role, content }))
+
+    setMessages((prev) => [...prev, { role: "user", content: question }])
+    setInput("")
+    setSending(true)
+
+    try {
+      const res = await goalsService.coach(question, history)
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: res.answer, sources: res.sources },
+      ])
+    } catch (err) {
+      const content = /ollama/i.test(err.message)
+        ? "Le coach IA est indisponible : vérifiez qu’Ollama est lancé, puis réessayez."
+        : err.message
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content, error: true },
+      ])
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <Card className="p-5">
+      <div className="max-h-96 min-h-40 space-y-3 overflow-y-auto pr-1">
+        {messages.length === 0 && (
+          <div>
+            <p className="text-sm text-slate-500">
+              Posez une question sur vos objectifs, vos habitudes ou votre
+              journal. Le coach répond à partir de vos propres données.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {STARTERS.map((q) => (
+                <Button key={q} variant="secondary" onClick={() => send(q)}>
+                  {q}
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
+        {messages.map((m, i) => (
+          <div
+            key={i}
+            className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+          >
+            <div
+              className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 ${
+                m.role === "user"
+                  ? "bg-violet-600 text-white"
+                  : m.error
+                    ? "bg-red-50 text-red-700"
+                    : "bg-slate-100 text-slate-800"
+              }`}
+            >
+              <p className="whitespace-pre-wrap">{m.content}</p>
+              {m.sources?.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {m.sources.map((src) => (
+                    <Badge
+                      key={`${src.type}-${src.id}`}
+                      className="bg-white text-slate-600"
+                    >
+                      {SOURCE_LABELS[src.type] || src.type} · {src.title}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+        {sending && (
+          <div className="flex justify-start">
+            <div className="rounded-2xl bg-slate-100 px-4 py-3 text-sm text-slate-500">
+              Le coach réfléchit...
+            </div>
+          </div>
+        )}
+        <div ref={endRef} />
+      </div>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          send(input)
+        }}
+        className="mt-4 flex gap-2"
+      >
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          maxLength={1000}
+          placeholder="Posez votre question au coach..."
+          className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-violet-400 focus:ring-4 focus:ring-violet-100"
+        />
+        <Button disabled={sending || !input.trim()} aria-label="Envoyer">
+          <Send size={16} />
+        </Button>
+      </form>
+    </Card>
+  )
+}
+
+function InsightsView() {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError("")
+    try {
+      setData(await goalsService.insights())
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
     }
   }, [])
 
-  const suggestions = useMemo(() => {
-    const out = []
-    const open = goals.filter((g) => g.status !== "completed")
-    const overdue = goals.filter((g) => goalState(g) === "overdue")
-    const nearDeadline = open.filter((g) => {
-      if (!g.end_date) return false
-      const left = daysUntil(g.end_date)
-      return left >= 0 && left <= 7 && g.progress < 70
-    })
-
-    if (goals.length === 0 && habits.length === 0) {
-      return ["Commencez par créer un objectif et une habitude : les suggestions apparaîtront ensuite."]
-    }
-
-    if (goals.length > 0) {
-      const done = goals.filter((g) => g.status === "completed").length
-      const avg = Math.round(
-        goals.reduce((sum, g) => sum + g.progress, 0) / goals.length,
-      )
-      out.push(
-        `${done} objectif(s) terminé(s) sur ${goals.length}, avec une progression moyenne de ${avg}%.`,
-      )
-    }
-    overdue.forEach((g) =>
-      out.push(
-        `« ${g.title} » a dépassé sa date de fin : terminez-le ou repoussez l’échéance pour rester réaliste.`,
-      ),
-    )
-    nearDeadline.forEach((g) =>
-      out.push(
-        `« ${g.title} » arrive à échéance dans ${daysUntil(g.end_date)} jour(s) avec ${g.progress}% réalisé : une courte session aujourd’hui peut aider.`,
-      ),
-    )
-    const stalled = open.filter((g) => g.progress === 0)
-    if (stalled.length > 0)
-      out.push(
-        `${stalled.length} objectif(s) n’ont pas encore démarré : choisissez une première petite étape pour « ${stalled[0].title} ».`,
-      )
-
-    if (habits.length > 0) {
-      const stats = habits.map((h) => ({ h, ...habitStats(h.checks) }))
-      const avgRate = Math.round(
-        stats.reduce((sum, s) => sum + s.rate, 0) / stats.length,
-      )
-      out.push(`Vous avez validé en moyenne ${avgRate}% de vos habitudes ces 7 derniers jours.`)
-      const best = [...stats].sort((a, b) => b.streak - a.streak)[0]
-      if (best.streak >= 2)
-        out.push(`Belle série : « ${best.h.name} » est tenue depuis ${best.streak} jours.`)
-      const todo = stats.filter((s) => !s.doneToday)
-      if (todo.length > 0)
-        out.push(
-          `Il reste ${todo.length} habitude(s) à valider aujourd’hui, par exemple « ${todo[0].h.name} ».`,
-        )
-    }
-    return out
-  }, [goals, habits])
-
-  if (loadingGoals || loadingHabits) return <Loading />
+  useEffect(() => {
+    load()
+  }, [load])
 
   return (
     <>
       <PageHeader
         title="Coach objectifs & habitudes"
-        subtitle="Suggestions simples calculées à partir de vos objectifs et de vos habitudes."
+        subtitle="Suggestions et coach IA, calculés à partir de vos objectifs, de vos habitudes et de votre journal."
+        actions={
+          <Button variant="secondary" onClick={load} disabled={loading}>
+            <Sparkles size={16} /> Actualiser
+          </Button>
+        }
       />
-      <div className="grid gap-5 md:grid-cols-3">
-        {suggestions.map((text) => (
-          <Card key={text} className="p-6">
-            <Sparkles className="text-cyan-500" />
-            <Badge className="mt-5 bg-cyan-50 text-cyan-700">
-              Suggestion, pas une prédiction
+      {loading ? (
+        <Loading label="L’IA analyse vos objectifs..." />
+      ) : error ? (
+        <Empty title="Suggestions indisponibles" text={error} />
+      ) : (
+        <>
+          <div className="mb-4 flex flex-wrap items-center gap-2">
+            <Badge
+              className={
+                data.source === "ai"
+                  ? "bg-cyan-50 text-cyan-700"
+                  : "bg-slate-100 text-slate-600"
+              }
+            >
+              {data.source === "ai"
+                ? "Rédigé par l’IA"
+                : "Calculé avec des règles simples"}
             </Badge>
-            <p className="mt-3 font-semibold leading-6">{text}</p>
-          </Card>
-        ))}
+            {data.warning && (
+              <span className="text-xs text-slate-500">
+                IA indisponible ({data.warning}) : suggestions calculées sans
+                IA.
+              </span>
+            )}
+          </div>
+          <div className="grid gap-5 md:grid-cols-3">
+            {data.insights.map((text, i) => (
+              <Card key={i} className="p-6">
+                <Sparkles className="text-cyan-500" />
+                <Badge className="mt-5 bg-cyan-50 text-cyan-700">
+                  Suggestion, pas une prédiction
+                </Badge>
+                <p className="mt-3 font-semibold leading-6">{text}</p>
+              </Card>
+            ))}
+          </div>
+        </>
+      )}
+      <div className="mt-8">
+        <SectionTitle
+          title="Coach IA"
+          subtitle="Une question sur vos objectifs, vos habitudes ou votre journal ?"
+        />
+        <CoachChat />
       </div>
     </>
   )
