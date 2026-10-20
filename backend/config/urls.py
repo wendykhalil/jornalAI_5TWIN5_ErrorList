@@ -18,6 +18,9 @@ urlpatterns = [
     
     # Media Management API
     path("api/", include("apps.media.urls")),
+
+    # Goals & Habits Management API
+    path("api/", include("apps.goals.urls")),
 ]
 
 # Serve media files in development
