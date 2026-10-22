@@ -1,18 +1,28 @@
+import { createBrowserRouter, Navigate } from "react-router";
 
-import { createBrowserRouter, Navigate } from "react-router"
+import AppShell from "../components/AppShell";
+import {
+  ProtectedRoute,
+  GuestRoute,
+  AdminRoute,
+  PublicRoute,
+} from "../components/ProtectedRoute";
 
-import AppShell from "../components/AppShell"
-import { ProtectedRoute, GuestRoute, AdminRoute, PublicRoute } from "../components/ProtectedRoute"
-
-import { Login, Register, Forgot, Onboarding, AdminLogin } from "../features/auth/AuthPages"
-import Dashboard from "../features/dashboard/Dashboard"
+import {
+  Login,
+  Register,
+  Forgot,
+  Onboarding,
+  AdminLogin,
+} from "../features/auth/AuthPages";
+import Dashboard from "../features/dashboard/Dashboard";
 
 import {
   JournalPage,
   MoodPage,
   MediaPage,
-  GoalsPage,
-} from "../features/modules/ModulePages"
+} from "../features/modules/ModulePages";
+import { GoalsPage } from "../features/goals/GoalsPages";
 
 import {
   MemoriesList,
@@ -22,7 +32,7 @@ import {
   MemoryCalendar,
   MemoryInsights,
   MemorySearch,
-} from "../features/memories/MemoryPages"
+} from "../features/memories/MemoryPages";
 
 import {
   AiInsights,
@@ -30,11 +40,11 @@ import {
   Profile,
   Settings,
   NotFound,
-} from "../features/misc/MiscPages"
+} from "../features/misc/MiscPages";
 
 // Admin imports
-import AdminLayout from "../admin/AdminLayout.jsx"
-import { adminSession } from "../admin/services.js"
+import AdminLayout from "../admin/AdminLayout.jsx";
+import { adminSession } from "../admin/services.js";
 
 import {
   AdminIndex,
@@ -57,7 +67,7 @@ import {
   SettingsPage,
   UserDetail,
   UsersPage,
-} from "../admin/pages.jsx"
+} from "../admin/pages.jsx";
 
 // User routes (protected by AppShell)
 const shell = [
@@ -103,11 +113,11 @@ const shell = [
   { path: "profile", Component: Profile },
   { path: "settings", Component: Settings },
   { path: "*", Component: NotFound },
-]
+];
 
 // Protect Admin pages with JWT auth
 function ProtectedAdminLayout() {
-  return <AdminRoute Component={AdminLayout} />
+  return <AdminRoute Component={AdminLayout} />;
 }
 
 // Application routes
@@ -115,10 +125,20 @@ export const router = createBrowserRouter([
   // User app
   { path: "/login", element: <GuestRoute Component={Login} /> },
   { path: "/register", element: <PublicRoute Component={Register} /> },
-  { path: "/forgot-password", element: <GuestRoute Component={() => <Forgot />} /> },
-  { path: "/reset-password", element: <GuestRoute Component={() => <Forgot reset />} /> },
+  {
+    path: "/forgot-password",
+    element: <GuestRoute Component={() => <Forgot />} />,
+  },
+  {
+    path: "/reset-password",
+    element: <GuestRoute Component={() => <Forgot reset />} />,
+  },
   { path: "/onboarding", element: <ProtectedRoute Component={Onboarding} /> },
-  { path: "/", element: <ProtectedRoute Component={() => <AppShell />} />, children: shell },
+  {
+    path: "/",
+    element: <ProtectedRoute Component={() => <AppShell />} />,
+    children: shell,
+  },
 
   // Admin login pages
   { path: "/admin/login", element: <GuestRoute Component={AdminLogin} /> },
@@ -160,4 +180,4 @@ export const router = createBrowserRouter([
       { path: "*", Component: AdminNotFound },
     ],
   },
-])
+]);
