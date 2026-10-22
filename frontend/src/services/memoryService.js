@@ -106,6 +106,7 @@ function mapBackendToFrontend(apiMemory, mediaArray = []) {
     tags: apiMemory.tags || [],
     cover: apiMemory.cover || null,
     favorite: apiMemory.favorite,
+    draft: apiMemory.draft || false,
     aiSummary: apiMemory.ai_summary || "",
     relatedJournalEntryId: apiMemory.related_journal_entry || null,
     mediaIds: mediaIds,
@@ -144,6 +145,7 @@ function mapFrontendToBackend(formData, mediaArray = []) {
     tags: formData.tags || [],
     cover: coverUrl,
     favorite: formData.favorite || false,
+    draft: formData.draft || false,
     related_journal_entry: formData.relatedJournalEntryId || null,
     // mediaIds, aiSummary, createdAt, updatedAt not sent to API
   }
@@ -209,7 +211,51 @@ export const memoryService = {
   },
 
   /**
-   * Search memories by query string
+   * Search memories using intelligent backend search with Ollama expansion
+   * 
+   * Takes a natural language query, sends it to backend which:
+   * 1. Uses Ollama to expand query with synonyms and related terms
+   * 2. Calculates relevance scores for matching memories
+   * 3. Returns ranked results
+   * 
+   * @param {string} query - Natural language search query
+   * @returns {Promise<Object>} { query, results: [...], count, expansion: {...}, search_method }
+   * @throws {Error} If query empty, network error, or search service unavailable
+   */
+  intelligentSearch: async (query) => {
+    if (!query || !query.trim()) {
+      throw new Error("Query is required")
+    }
+
+    try {
+      const response = await memoryRequest("ai/search/", {
+        method: "POST",
+        body: JSON.stringify({ query: query.trim() }),
+      })
+      
+      // Transform results from snake_case (backend) to camelCase (frontend)
+      // Backend MemorySerializer returns event_date, ai_summary, related_journal_entry in snake_case
+      if (response.results && Array.isArray(response.results)) {
+        response.results = response.results.map(result => 
+          mapBackendToFrontend(result, [])
+        )
+      }
+      
+      return response
+    } catch (error) {
+      // Re-throw with user-friendly message
+      if (error.message.includes("timeout")) {
+        throw new Error("Search timed out. Try again.")
+      }
+      if (error.message.includes("unavailable")) {
+        throw new Error("Search service is unavailable. Try again later.")
+      }
+      throw error
+    }
+  },
+
+  /**
+   * Search memories by query string (classical client-side fallback)
    * Frontend-side filtering: load all and filter locally
    */
   searchMemories: async (query) => {
@@ -237,8 +283,12 @@ export const memoryService = {
   },
 
   /**
-   * Get similar memories (same category or shared tags)
-   * Frontend-side filtering: load all and filter locally
+   * Get similar memories based on shared category, tags, and location.
+   * Frontend-side filtering: load all and filter locally.
+   * Ranks by relevance: shared category, number of shared tags, matching location.
+   * 
+   * @param {string} id - Memory ID to find similar memories for
+   * @returns {Promise<Array>} - Up to 4 similar memories, ranked by relevance
    */
   getSimilarMemories: async (id) => {
     const all = await memoryService.getMemories()
@@ -246,47 +296,158 @@ export const memoryService = {
 
     if (!current) return []
 
-    return all
-      .filter(
-        (x) =>
-          x.id !== id &&
-          (x.category === current.category ||
-            x.tags.some((t) => current.tags.includes(t))),
-      )
-      .slice(0, 4)
+    // Calculate relevance score for each potential match
+    const scored = all
+      .filter((x) => x.id !== id) // Exclude current memory
+      .map((x) => {
+        let score = 0
+        
+        // Category match (highest weight: 3 points)
+        if (x.category === current.category) {
+          score += 3
+        }
+        
+        // Shared tags (1 point per shared tag, max 2)
+        const sharedTagCount = x.tags.filter((t) =>
+          current.tags.some((ct) => ct.toLowerCase().trim() === t.toLowerCase().trim())
+        ).length
+        score += Math.min(sharedTagCount, 2)
+        
+        // Location match: only if both non-empty and identical (case-insensitive)
+        const currentLocation = (current.location || '').trim().toLowerCase()
+        const xLocation = (x.location || '').trim().toLowerCase()
+        if (currentLocation && xLocation && currentLocation === xLocation) {
+          score += 1
+        }
+        
+        return { memory: x, score }
+      })
+      .filter((item) => item.score > 0) // Only keep memories with at least one match
+      .sort((a, b) => b.score - a.score) // Sort by score descending
+      .slice(0, 4) // Take top 4
+      .map((item) => item.memory) // Extract memory objects
+
+    return scored
   },
 
   /**
-   * Suggest a category based on text
-   * Simulated: rules-based suggestion
+   * Suggest a category based on description using real AI (Ollama)
+   * 
+   * @param {string} description - Memory description text
+   * @returns {Promise<Object>} { suggested_category, confidence, reasoning }
+   * @throws {Error} If description is empty, network error, or AI service unavailable
    */
-  suggestMemoryCategory: (text) => {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const suggested = /campus|étude|examen|projet/i.test(text)
-          ? "Études"
-          : /plage|voyage|mer/i.test(text)
-            ? "Voyages"
-            : "Événements personnels"
-        resolve(suggested)
-      }, 650)
-    })
+  suggestMemoryCategory: async (description) => {
+    if (!description || !description.trim()) {
+      throw new Error("Description is required")
+    }
+
+    try {
+      const response = await memoryRequest("ai/suggest-category/", {
+        method: "POST",
+        body: JSON.stringify({ description: description.trim() }),
+      })
+      return response
+    } catch (error) {
+      // Re-throw with user-friendly message
+      if (error.message.includes("timeout")) {
+        throw new Error("AI suggestion took too long. Try again.")
+      }
+      if (error.message.includes("unavailable")) {
+        throw new Error("AI service is unavailable. Suggestions disabled.")
+      }
+      throw error
+    }
   },
 
   /**
-   * Suggest tags based on text
-   * Simulated: extract words from text
+   * Suggest tags based on title and description using real AI (Ollama)
+   * 
+   * @param {string} title - Memory title
+   * @param {string} description - Memory description text
+   * @returns {Promise<Object>} { suggested_tags: [...], confidence }
+   * @throws {Error} If inputs empty, network error, or AI service unavailable
    */
-  suggestMemoryTags: (text) => {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const tags = [
-          ...new Set(
-            (text.toLowerCase().match(/[a-zà-ÿ]{5,}/g) || []).slice(0, 4),
-          ),
-        ]
-        resolve(tags)
-      }, 650)
-    })
+  suggestMemoryTags: async (title, description) => {
+    if (!title || !title.trim()) {
+      throw new Error("Title is required")
+    }
+
+    if (!description || !description.trim()) {
+      throw new Error("Description is required")
+    }
+
+    try {
+      const response = await memoryRequest("ai/suggest-tags/", {
+        method: "POST",
+        body: JSON.stringify({
+          title: title.trim(),
+          description: description.trim(),
+        }),
+      })
+      return response
+    } catch (error) {
+      // Re-throw with user-friendly message
+      if (error.message.includes("timeout")) {
+        throw new Error("AI suggestion took too long. Try again.")
+      }
+      if (error.message.includes("unavailable")) {
+        throw new Error("AI service is unavailable. Suggestions disabled.")
+      }
+      throw error
+    }
+  },
+
+  /**
+   * Generate a concise AI summary for a memory using real AI (Ollama)
+   * 
+   * @param {string} title - Memory title
+   * @param {string} description - Memory description text
+   * @param {string} [category] - Optional memory category
+   * @param {Array<string>} [tags] - Optional memory tags
+   * @param {string} [location] - Optional memory location
+   * @returns {Promise<Object>} { summary: string, model: string }
+   * @throws {Error} If inputs empty, network error, or AI service unavailable
+   */
+  generateMemorySummary: async (title, description, category = null, tags = null, location = null) => {
+    if (!title || !title.trim()) {
+      throw new Error("Title is required")
+    }
+
+    if (!description || !description.trim()) {
+      throw new Error("Description is required")
+    }
+
+    try {
+      const payload = {
+        title: title.trim(),
+        description: description.trim(),
+      }
+      
+      if (category) {
+        payload.category = category
+      }
+      if (tags && Array.isArray(tags) && tags.length > 0) {
+        payload.tags = tags
+      }
+      if (location) {
+        payload.location = location
+      }
+      
+      const response = await memoryRequest("ai/generate-summary/", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      })
+      return response
+    } catch (error) {
+      // Re-throw with user-friendly message
+      if (error.message.includes("timeout")) {
+        throw new Error("Summary generation took too long. Try again.")
+      }
+      if (error.message.includes("unavailable")) {
+        throw new Error("AI service is unavailable. Try again later.")
+      }
+      throw error
+    }
   },
 }
