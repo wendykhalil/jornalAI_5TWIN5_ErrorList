@@ -79,7 +79,7 @@ function JournalPhotos({ ids = [] }) {
   }, [key])
   if (!attachments.length) return null
   return <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
-    {attachments.map((file) => <div key={file.id} className="overflow-hidden rounded-xl border border-slate-100">
+    {attachments.map((file) => <div key={file.id} className="overflow-hidden rounded-2xl border border-slate-200 shadow-sm">
       {file.media_type === "video"
         ? <video src={file.url || file.file} controls preload="metadata" className="aspect-square w-full bg-black object-contain" />
         : <img src={file.url || file.file} alt={file.title} className="aspect-square w-full object-cover" />}
@@ -112,20 +112,20 @@ function JournalVisionPanel({ images = [], busyId, error, result, onAnalyze }) {
 
   if (!images.length) return null
   return (
-    <div className="mt-6 rounded-2xl border border-violet-200 bg-violet-50/60 p-5">
+    <div className="mt-4">
       <div className="flex items-center gap-2">
         <Sparkles size={19} className="text-violet-600" />
-        <h2 className="font-extrabold text-violet-900">Analyser une photo avec l'IA</h2>
+        <h3 className="text-lg font-bold text-slate-900">Choisir une photo</h3>
       </div>
-      <p className="mt-1 text-xs text-violet-700">Choisissez une photo. L'analyse est facultative et ne modifie pas votre journal.</p>
+      <p className="mt-2 text-base leading-7 text-slate-600">Choisissez une photo. L'analyse est facultative et ne modifie pas votre journal.</p>
       {loading && <p className="mt-3 text-sm">Chargement des photos...</p>}
       {loadError && <p role="alert" className="mt-3 text-sm text-red-600">{loadError}</p>}
       {!loading && !loadError && photos.length === 0 && <p className="mt-3 text-sm text-slate-600">Aucune image compatible attachée à cette entrée.</p>}
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 md:grid-cols-3">
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
         {photos.map((photo) => (
-          <div key={photo.id} className="overflow-hidden rounded-xl border border-violet-100 bg-white p-2">
-            <img src={photo.url || photo.file} alt={photo.title || "Photo du journal"} className="aspect-video w-full rounded-lg object-cover" />
-            <p className="mt-2 truncate text-xs font-semibold text-slate-700">{photo.title || "Photo"}</p>
+          <div key={photo.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+            <img src={photo.url || photo.file} alt={photo.title || "Photo du journal"} className="aspect-square w-full rounded-lg object-cover" />
+            <p className="mt-2 truncate text-sm font-semibold text-slate-700">{photo.title || "Photo"}</p>
             <Button variant="ai" className="mt-2 w-full" disabled={Boolean(busyId)} onClick={() => onAnalyze(photo.id)}>
               <Sparkles size={15} /> {String(busyId) === String(photo.id) ? "Analyse en cours..." : "Analyser cette photo"}
             </Button>
@@ -135,11 +135,11 @@ function JournalVisionPanel({ images = [], busyId, error, result, onAnalyze }) {
       {busyId && <p role="status" className="mt-3 text-sm text-violet-700">Llama 3.2 Vision analyse votre photo. Cela peut prendre un moment...</p>}
       {error && <p role="alert" className="mt-3 text-sm text-red-600">{error}</p>}
       {result && !busyId && (
-        <div className="mt-4 space-y-3 rounded-xl border border-violet-100 bg-white p-4 text-sm">
+        <div className="mt-4 max-h-[560px] space-y-4 overflow-y-auto rounded-xl border border-violet-100 bg-violet-50/50 p-5 text-base leading-8">
           <p><strong>Description :</strong> {result.description}</p>
           <div>
             <strong>Suggestion pour votre journal :</strong>
-            <p className="mt-2 whitespace-pre-wrap rounded-lg bg-slate-50 p-3">{result.journal_suggestion}</p>
+            <p className="mt-2 whitespace-pre-wrap rounded-xl border border-violet-100 bg-violet-50/50 p-4">{result.journal_suggestion}</p>
           </div>
           <p className="text-xs text-slate-500">Texte proposé par l'IA : vérifiez-le avant de l'utiliser. Aucune modification automatique.</p>
         </div>
@@ -224,10 +224,13 @@ function EntryForm({ item }) {
   }
 
   return <>
-    <PageHeader title={item ? "Modifier l’entrée" : "Nouvelle entrée"}
-      subtitle="Écrivez librement. Vos entrées sont enregistrées dans votre journal personnel." />
-    <div className="grid gap-6 xl:grid-cols-[1fr_340px]">
-      <Card className="space-y-5 p-6">
+    <div className="mb-7 rounded-3xl border border-slate-200 bg-gradient-to-r from-white via-violet-50/60 to-indigo-50/60 p-7 shadow-sm">
+      <Link to="/journal" className="mb-5 inline-flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-violet-700"><ArrowLeft size={16} /> Mon journal</Link>
+      <div className="flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-2xl bg-violet-600 text-white shadow-sm"><Edit3 size={20} /></span><div><p className="text-xs font-bold uppercase tracking-[0.2em] text-violet-600">Espace d’écriture</p><h1 className="text-2xl font-bold tracking-tight text-slate-900">{item ? "Modifier mon entrée" : "Écrire une nouvelle entrée"}</h1></div></div>
+      <p className="mt-3 text-sm text-slate-500">Un moment pour vous. Écrivez librement, à votre rythme.</p>
+    </div>
+    <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_350px]">
+      <Card className="space-y-6 rounded-3xl border border-slate-200 bg-white p-7 shadow-sm">
         <Input label="Titre" placeholder="Donnez un titre à cette journée" value={form.title}
           onChange={(e) => setForm({ ...form, title: e.target.value })} />
         <Textarea label="Votre histoire" rows={12} placeholder="Qu’avez-vous envie de retenir ?"
@@ -242,7 +245,7 @@ function EntryForm({ item }) {
           <Input label="Tags (séparés par des virgules)" value={tagText}
             onChange={(e) => setTagText(e.target.value)} />
         </div>
-        <div className="rounded-xl border border-slate-200 p-4">
+        <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/60 p-5">
           <label className="mb-3 block text-sm font-bold">Photos et vidéos de cette entrée</label>
           <input type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm"
             multiple disabled={saving} className="block w-full text-sm"
@@ -297,7 +300,7 @@ function EntryForm({ item }) {
         </div>
       </Card>
       <div className="space-y-5">
-        <Card className="p-5">
+        <Card className="rounded-3xl border border-violet-100 bg-gradient-to-b from-violet-50/70 to-white p-6 shadow-sm">
           <SectionTitle title="Assistant d’écriture IA" subtitle="Améliorez votre texte sans modifier votre brouillon automatiquement." />
           <Button variant="ai" className="w-full" disabled={aiBusy || !form.content.trim()}
             onClick={async () => {
@@ -320,7 +323,7 @@ function EntryForm({ item }) {
             </div>
           </div>}
         </Card>
-        <Card className="p-5"><SectionTitle title="Photos et vidéos sélectionnées" />
+        <Card className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"><SectionTitle title="Photos et vidéos sélectionnées" />
           <JournalPhotos ids={selectedIds} />
           <p className="mt-2 text-xs text-slate-500">Les nouveaux fichiers seront envoyés lors de l’enregistrement.</p>
         </Card>
@@ -364,6 +367,7 @@ export function JournalPage({ mode = "list" }) {
   const [photoAnalysis, setPhotoAnalysis] = useState(null)
   const [photoBusyId, setPhotoBusyId] = useState(null)
   const [photoError, setPhotoError] = useState("")
+  const [assistantTab, setAssistantTab] = useState("text")
 
   const analyzePhoto = async (mediaId) => {
     if (!id || photoBusyId) return
@@ -525,65 +529,71 @@ export function JournalPage({ mode = "list" }) {
     if (!item) return <Empty title="Entrée introuvable" />
     return (
       <>
-        <Link to="/journal" className="mb-5 inline-flex items-center gap-2 text-sm font-bold text-slate-500">
-          <ArrowLeft size={16} /> Retour au journal
-        </Link>
-        <Card className="mx-auto max-w-4xl overflow-hidden">
-          <div className="border-b border-slate-100 p-7">
-            <div className="flex flex-wrap gap-2">
-              <Badge className="bg-violet-50 text-violet-700">{item.mood}</Badge>
-              {item.draft && <Badge>Brouillon</Badge>}
-              {(item.tags || []).map((x) => <Badge key={x}>#{x}</Badge>)}
-            </div>
-            <h1 className="mt-5 text-3xl font-extrabold">{item.title}</h1>
-            <p className="mt-2 text-sm text-slate-500">{item.date}</p>
+        <div className="mx-auto max-w-7xl">
+          <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+            <Link to="/journal" className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:border-violet-300 hover:text-violet-700"><ArrowLeft size={15} /> Toutes mes entrées</Link>
+            <span className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">MindLog / Journal personnel</span>
           </div>
-          <div className="p-7">
-            <p className="whitespace-pre-line leading-8 text-slate-700">{item.content}</p>
-            <JournalPhotos ids={item.images || []} />
-            <JournalVisionPanel
-              images={item.images || []}
-              busyId={photoBusyId}
-              error={photoError}
-              result={photoAnalysis}
-              onAnalyze={analyzePhoto}
-            />
-            <div className="mt-8 rounded-2xl border border-cyan-100 bg-cyan-50 p-5">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h2 className="font-extrabold text-cyan-900">Analyse IA de votre journal</h2>
-                  <p className="mt-1 text-xs text-cyan-700">Analyse locale avec Llama 3.2 · Les émotions détectées sont des suggestions, pas un diagnostic.</p>
+          <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_440px]">
+            <article className="min-w-0 overflow-hidden rounded-[32px] border border-slate-200 bg-white shadow-[0_18px_60px_-35px_rgba(15,23,42,0.32)]">
+              <header className="relative isolate overflow-hidden bg-[#18172f] px-7 pb-10 pt-9 text-white md:px-11 md:pb-12 md:pt-11">
+                <div aria-hidden="true" className="pointer-events-none absolute -right-20 -top-28 size-80 rounded-full bg-violet-500/25 blur-3xl" />
+                <div aria-hidden="true" className="pointer-events-none absolute -bottom-32 left-1/3 size-72 rounded-full bg-fuchsia-400/10 blur-3xl" />
+                <div className="relative flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-violet-100"><span className="size-2 rounded-full" style={{backgroundColor: moodColors[item.mood] || '#a78bfa'}} />{item.mood}</span>
+                  {item.draft && <span className="rounded-full border border-amber-300/30 bg-amber-300/10 px-3 py-1.5 text-xs font-semibold text-amber-200">Brouillon</span>}
+                  <span className="ml-auto inline-flex items-center gap-2 text-xs font-medium text-slate-300"><CalendarDays size={14} />{item.date}</span>
                 </div>
-                <Button variant="ai" disabled={aiLoading || !item.content?.trim()} onClick={analyzeJournal}>
-                  <Sparkles size={16} /> {aiLoading ? "Analyse en cours..." : aiAnalysis ? "Relancer l'analyse IA" : "Analyser avec l'IA"}
-                </Button>
+                <p className="relative mt-9 text-[11px] font-bold uppercase tracking-[0.28em] text-violet-300">Une page de mon histoire</p>
+                <h1 className="relative mt-3 max-w-2xl break-words text-3xl font-extrabold leading-tight tracking-tight md:text-5xl">{item.title}</h1>
+                {(item.tags || []).length > 0 && <div className="relative mt-6 flex flex-wrap gap-2">{item.tags.map((tag) => <span key={tag} className="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs text-slate-200">#{tag}</span>)}</div>}
+              </header>
+              <div className="px-7 py-9 md:px-11 md:py-11">
+                <div className="mb-6 flex items-center gap-3"><span className="h-px w-9 bg-violet-400"/><span className="text-[11px] font-bold uppercase tracking-[0.2em] text-violet-600">Mon récit</span></div>
+                <div className="whitespace-pre-wrap break-words text-[19px] leading-[1.95] text-slate-700 md:text-[21px]">
+                  {item.content || <span className="italic text-slate-400">Cette entrée ne contient pas encore de texte.</span>}
+                </div>
+                {(item.images || []).length > 0 && <section className="mt-9 border-t border-slate-100 pt-7">
+                  <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-base font-bold text-slate-900">Souvenirs associés</h2><p className="mt-1 text-xs text-slate-500">Photos et vidéos de cette journée</p></div><button type="button" onClick={() => setAssistantTab('photo')} className="inline-flex items-center gap-1.5 rounded-full bg-violet-50 px-3 py-2 text-xs font-semibold text-violet-700 transition hover:bg-violet-100"><Sparkles size={14}/> Analyser avec l'IA</button></div>
+                  <JournalPhotos ids={item.images || []} />
+                </section>}
+                <footer className="mt-9 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-6">
+                  <span className="text-xs text-slate-400">Un espace pour garder ce qui compte.</span>
+                  <div className="flex flex-wrap gap-2"><Link to={`/journal/${item.id}/edit`}><Button variant="secondary"><Edit3 size={15}/> Modifier</Button></Link><Button variant="danger" onClick={() => setConfirm(true)}><Trash2 size={15}/> Supprimer</Button></div>
+                </footer>
+                {error && <p className="mt-3 text-sm text-red-600" role="alert">{error}</p>}
               </div>
-              {aiLoading && <p className="mt-4 text-sm text-cyan-800" role="status">Llama 3.2 analyse votre entrée. Cela peut prendre quelques secondes...</p>}
-              {aiError && <p className="mt-4 text-sm text-red-600" role="alert">{aiError}</p>}
-              {aiAnalysis && !aiLoading && (
-                <div className="mt-4 space-y-3 text-sm text-cyan-950">
-                  <p><strong>Émotion principale :</strong> {aiAnalysis.primary_emotion}</p>
-                  <div>
-                    <strong>Émotions secondaires :</strong>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {(aiAnalysis.secondary_emotions || []).length
-                        ? aiAnalysis.secondary_emotions.map((emotion, index) => <Badge key={`${emotion}-${index}`} className="bg-white text-cyan-800">{emotion}</Badge>)
-                        : <span className="ml-2">Aucune identifiée</span>}
-                    </div>
-                  </div>
-                  <p><strong>Résumé :</strong> {aiAnalysis.summary}</p>
-                  <p><strong>Observation :</strong> {aiAnalysis.insight}</p>
-                  <p><strong>Question de réflexion :</strong> {aiAnalysis.reflection_question}</p>
+            </article>
+            <aside className="min-w-0 space-y-5 xl:sticky xl:top-6">
+              <section className="overflow-hidden rounded-[28px] border border-violet-200/70 bg-white shadow-[0_15px_45px_-28px_rgba(109,40,217,0.35)]">
+                <div className="bg-gradient-to-br from-violet-100 via-white to-fuchsia-50 px-6 pb-5 pt-6">
+                  <div className="flex items-center gap-3"><span className="grid size-12 place-items-center rounded-2xl bg-violet-600 text-white shadow-lg shadow-violet-600/20"><Sparkles size={22}/></span><div><p className="text-[10px] font-bold uppercase tracking-[0.18em] text-violet-600">Votre compagnon d'écriture</p><h2 className="mt-0.5 text-2xl font-extrabold tracking-tight text-slate-900">MindLog AI</h2></div></div>
+                  <p className="mt-4 text-base leading-7 text-slate-600">Explorez vos pensées et vos souvenirs grâce à une analyse intelligente, à votre rythme.</p>
                 </div>
-              )}
-            </div>
-            <div className="mt-6 flex gap-2">
-              <Link to={`/journal/${item.id}/edit`}><Button variant="secondary"><Edit3 size={16} /> Modifier</Button></Link>
-              <Button variant="danger" onClick={() => setConfirm(true)}><Trash2 size={16} /> Supprimer</Button>
-            </div>
-            {error && <p className="mt-3 text-sm text-red-600" role="alert">{error}</p>}
+                <div className="p-5">
+                  <div className="grid grid-cols-2 gap-2 rounded-2xl bg-slate-100 p-1.5" role="tablist" aria-label="Fonctions de l'assistant IA">
+                    <button type="button" role="tab" aria-selected={assistantTab === 'text'} onClick={() => setAssistantTab('text')} className={`flex items-center justify-center gap-1.5 rounded-xl px-3 py-3.5 text-sm font-bold transition ${assistantTab === 'text' ? 'bg-white text-violet-700 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}><Edit3 size={14}/> Mon texte</button>
+                    <button type="button" role="tab" aria-selected={assistantTab === 'photo'} onClick={() => setAssistantTab('photo')} className={`flex items-center justify-center gap-1.5 rounded-xl px-3 py-3.5 text-sm font-bold transition ${assistantTab === 'photo' ? 'bg-white text-violet-700 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}><ImageIcon size={14}/> Mes photos</button>
+                  </div>
+                  {assistantTab === 'text' ? <div className="mt-5 space-y-4" role="tabpanel">
+                    <div className="rounded-2xl border border-violet-100 bg-violet-50/60 p-4"><p className="text-lg font-bold text-slate-900">Comprendre mes émotions</p><p className="mt-2 text-base leading-7 text-slate-600">Découvrez les émotions, les thèmes et une question pour réfléchir à votre récit.</p></div>
+                    <Button variant="ai" className="w-full" disabled={aiLoading || !item.content?.trim()} onClick={analyzeJournal}><Sparkles size={16}/>{aiLoading ? 'Analyse en cours...' : aiAnalysis ? "Relancer l'analyse" : 'Lancer mon analyse'}</Button>
+                    {aiLoading && <p role="status" className="text-xs text-violet-700">Llama 3.2 analyse votre texte...</p>}
+                    {aiError && <p role="alert" className="text-sm text-red-600">{aiError}</p>}
+                    {aiAnalysis && !aiLoading && <div className="max-h-[620px] space-y-5 overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50/80 p-5 text-base leading-8">
+                      <div><p className="text-[10px] font-bold uppercase tracking-widest text-violet-600">Émotion dominante</p><p className="mt-1 text-xl font-extrabold text-slate-900">{aiAnalysis.primary_emotion}</p></div>
+                      <div><p className="text-xs font-bold text-slate-700">Émotions secondaires</p><div className="mt-2 flex flex-wrap gap-1">{(aiAnalysis.secondary_emotions || []).length ? aiAnalysis.secondary_emotions.map((emotion,index)=><Badge key={`${emotion}-${index}`} className="bg-white text-violet-800">{emotion}</Badge>):<span className="text-slate-500">Aucune identifiée</span>}</div></div>
+                      <div><p className="text-xs font-bold text-slate-700">Résumé</p><p className="mt-1 text-slate-600">{aiAnalysis.summary}</p></div>
+                      <div><p className="text-xs font-bold text-slate-700">Observation</p><p className="mt-1 text-slate-600">{aiAnalysis.insight}</p></div>
+                      <div className="rounded-xl bg-white p-3"><p className="text-xs font-bold text-violet-700">Pour aller plus loin</p><p className="mt-1 text-slate-700">{aiAnalysis.reflection_question}</p></div>
+                    </div>}
+                  </div> : <div className="mt-4" role="tabpanel"><JournalVisionPanel images={item.images || []} busyId={photoBusyId} error={photoError} result={photoAnalysis} onAnalyze={analyzePhoto}/></div>}
+                  <p className="mt-5 border-t border-slate-100 pt-4 text-sm leading-6 text-slate-500">Analyse locale avec Llama 3.2. Les résultats sont des suggestions, pas un diagnostic.</p>
+                </div>
+              </section>
+            </aside>
           </div>
-        </Card>
+        </div>
         <Modal open={confirm} onClose={() => !busy && setConfirm(false)} title="Supprimer cette entrée?" actions={<>
           <Button variant="secondary" disabled={busy} onClick={() => setConfirm(false)}>Annuler</Button>
           <Button variant="danger" disabled={busy} onClick={removeEntry}>{busy ? "Suppression..." : "Confirmer"}</Button>
@@ -596,9 +606,13 @@ export function JournalPage({ mode = "list" }) {
 
   return (
     <>
-      <PageHeader title="Mon journal" subtitle="Un espace pour écrire, comprendre et revisiter vos journées."
-        actions={<Link to="/journal/new"><Button><Plus size={17} /> Nouvelle entrée</Button></Link>} />
-      <div className="mb-5 flex flex-wrap gap-2">
+      <div className="mb-7 overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-r from-white via-violet-50/70 to-indigo-50/70 p-7 shadow-sm md:p-9">
+        <div className="flex flex-wrap items-center justify-between gap-5">
+          <div><div className="mb-3 inline-flex items-center gap-2 rounded-full border border-violet-200 bg-white/80 px-3 py-1 text-xs font-bold uppercase tracking-[0.15em] text-violet-700"><Sparkles size={13} /> Votre espace personnel</div><h1 className="text-3xl font-bold tracking-tight text-slate-900 md:text-4xl">Mon journal<span className="text-violet-600">.</span></h1><p className="mt-2 max-w-lg text-sm leading-6 text-slate-500">Un espace calme pour raconter vos journées, suivre vos émotions et retrouver vos souvenirs.</p></div>
+          <Link to="/journal/new"><Button><Plus size={17} /> Nouvelle entrée</Button></Link>
+        </div>
+      </div>
+      <div className="mb-6 flex flex-wrap gap-3">
         <Button variant="ai" onClick={() => setShowChat((v) => !v)}>
           <MessageCircle size={16} /> {showChat ? "Fermer le chat IA" : "Discuter avec mon journal"}
         </Button>
@@ -609,7 +623,7 @@ export function JournalPage({ mode = "list" }) {
           Actualiser les statistiques
         </Button>}
       </div>
-      {showChat && <Card className="mb-6 space-y-4 p-5">
+      {showChat && <Card className="mb-6 space-y-4 rounded-3xl border border-violet-100 bg-white p-6 shadow-sm">
         <SectionTitle title="Ask My Journal — Chat IA" subtitle="Posez des questions sur vos entrées enregistrées." />
         <div className="max-h-96 space-y-4 overflow-y-auto" aria-live="polite">
           {chatMessages.length === 0 && <p className="text-sm text-slate-500">Exemple : Qu’est-ce qui m’a rendu heureux récemment ?</p>}
@@ -696,7 +710,7 @@ export function JournalPage({ mode = "list" }) {
           )}
         </div>
       )}
-      <Card className="mb-5 space-y-3 p-4">
+      <Card className="mb-6 space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="relative">
           <Search className="absolute left-3 top-3 text-slate-400" size={18} />
           <input value={q} onChange={(e) => { setQ(e.target.value); resetPage() }}
@@ -731,13 +745,13 @@ export function JournalPage({ mode = "list" }) {
         </div>
       </Card>
       {listError && <p className="mb-4 text-sm text-red-600" role="alert">{listError}</p>}
-      <p className="mb-3 text-sm text-slate-500">{count} entrée(s) trouvée(s) {listLoading ? "· Recherche en cours..." : ""}</p>
+      <p className="mb-4 text-sm font-medium text-slate-500">{count} entrée(s) trouvée(s) {listLoading ? "· Recherche en cours..." : ""}</p>
       {listLoading ? <p>Chargement du journal...</p> : results.length ? (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {results.map((x) => <Card key={x.id} className="group p-5">
+        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+          {results.map((x) => <Card key={x.id} className="group flex h-full flex-col rounded-3xl border border-slate-200 bg-white p-6 shadow-sm transition-all duration-200 hover:-translate-y-1 hover:border-violet-200 hover:shadow-lg">
             <div className="flex justify-between">
               <div className="flex gap-2">
-                <Badge className="bg-violet-50 text-violet-700">{x.mood}</Badge>
+                <Badge className="bg-violet-50 text-violet-700"><span className="mr-1.5 inline-block h-2 w-2 rounded-full" style={{ backgroundColor: moodColors[x.mood] || "#8b5cf6" }} />{x.mood}</Badge>
                 {x.draft && <Badge>Brouillon</Badge>}
               </div>
               <button aria-label={x.favorite ? "Retirer des favoris" : "Ajouter aux favoris"} onClick={() => toggleFavorite(x)}>
@@ -745,10 +759,10 @@ export function JournalPage({ mode = "list" }) {
               </button>
             </div>
             <Link to={`/journal/${x.id}`}>
-              <h2 className="mt-4 text-lg font-extrabold group-hover:text-violet-600">{x.title}</h2>
-              <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-500">{x.content}</p>
+              <h2 className="mt-5 text-xl font-bold tracking-tight text-slate-900 transition group-hover:text-violet-600">{x.title}</h2>
+              <p className="mt-3 line-clamp-3 min-h-18 text-sm leading-6 text-slate-500">{x.content}</p>
             </Link>
-            <div className="mt-4 flex items-center gap-2 border-t border-slate-100 pt-4 text-xs text-slate-400">
+            <div className="mt-auto flex items-center gap-2 border-t border-slate-100 pt-4 text-xs text-slate-500">
               <CalendarDays size={14} />{x.date}
               <div className="ml-auto flex gap-1">{(x.tags || []).slice(0, 2).map((t) => <span key={t}>#{t}</span>)}</div>
             </div>
