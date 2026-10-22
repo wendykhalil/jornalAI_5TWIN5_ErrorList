@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react"
+import { useMemo, useState, useEffect, useRef } from "react"
 import { mediaPhotoService } from "../../services/mediaPhotoService"
 import { Link, useNavigate, useParams } from "react-router"
 import {
@@ -41,6 +41,7 @@ import { useStore } from "../../store/AppStore"
 import { journalService } from "../../services/journalService"
 import { moodService } from "../../services/moodService"
 import { journalVisionService } from "../../services/journalVisionService"
+import { journalWhisperService } from "../../services/journalWhisperService"
 import {
   Badge,
   Button,
@@ -148,6 +149,75 @@ function JournalVisionPanel({ images = [], busyId, error, result, onAnalyze }) {
   )
 }
 
+function JournalDictation({ onTranscript, disabled = false }) {
+  const recorderRef = useRef(null)
+  const streamRef = useRef(null)
+  const chunksRef = useRef([])
+  const [recording, setRecording] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+
+  useEffect(() => () => {
+    if (recorderRef.current?.state === "recording") recorderRef.current.stop()
+    streamRef.current?.getTracks().forEach((track) => track.stop())
+  }, [])
+
+  const stop = () => {
+    if (recorderRef.current?.state === "recording") recorderRef.current.stop()
+  }
+
+  const start = async () => {
+    setError("")
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setError("Enregistrement non disponible. Utilisez localhost ou HTTPS et un navigateur compatible.")
+      return
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      streamRef.current = stream
+      const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"]
+        .find((type) => MediaRecorder.isTypeSupported(type))
+      const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream)
+      recorderRef.current = recorder
+      chunksRef.current = []
+      recorder.ondataavailable = (event) => { if (event.data.size) chunksRef.current.push(event.data) }
+      recorder.onerror = () => { setError("Erreur pendant l'enregistrement."); setRecording(false) }
+      recorder.onstop = async () => {
+        setRecording(false)
+        stream.getTracks().forEach((track) => track.stop())
+        streamRef.current = null
+        const type = recorder.mimeType || "audio/webm"
+        const extension = type.includes("mp4") ? "mp4" : type.includes("ogg") ? "ogg" : "webm"
+        const blob = new Blob(chunksRef.current, { type })
+        if (!blob.size) { setError("Enregistrement vide."); return }
+        setBusy(true)
+        try {
+          const result = await journalWhisperService.transcribe(new File([blob], `recording.${extension}`, { type }))
+          if (!result?.text) throw new Error("Aucun texte transcrit.")
+          onTranscript(result.text)
+        } catch (err) { setError(err.message || "Transcription impossible.") }
+        finally { setBusy(false) }
+      }
+      recorder.start()
+      setRecording(true)
+    } catch (err) { setError(err.message || "Accès au microphone refusé.") }
+  }
+
+  return <div className="rounded-2xl border border-violet-100 bg-violet-50/50 p-4">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div><p className="text-sm font-bold text-slate-900">Dictée vocale · Whisper</p>
+        <p className="text-xs text-slate-500">Parlez librement, puis vérifiez la transcription avant d'enregistrer.</p></div>
+      <button type="button" disabled={disabled || busy} onClick={recording ? stop : start}
+        className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${recording ? "bg-rose-600" : "bg-violet-600 hover:bg-violet-700"}`}>
+        <Mic size={16}/>{recording ? "Arrêter" : busy ? "Transcription..." : "Dicter mon texte"}
+      </button>
+    </div>
+    {recording && <p role="status" className="mt-2 text-xs font-medium text-rose-700">● Enregistrement en cours…</p>}
+    {busy && <p role="status" className="mt-2 text-xs text-violet-700">Whisper transcrit votre audio localement…</p>}
+    {error && <p role="alert" className="mt-2 text-xs text-red-600">{error}</p>}
+  </div>
+}
+
 function EntryForm({ item }) {
   const { createJournal, updateJournal, notify } = useStore()
   const nav = useNavigate()
@@ -235,6 +305,7 @@ function EntryForm({ item }) {
           onChange={(e) => setForm({ ...form, title: e.target.value })} />
         <Textarea label="Votre histoire" rows={12} placeholder="Qu’avez-vous envie de retenir ?"
           value={form.content} onChange={(e) => setForm({ ...form, content: e.target.value })} />
+        <JournalDictation disabled={saving} onTranscript={(text) => setForm((prev) => ({ ...prev, content: [prev.content.trim(), text.trim()].filter(Boolean).join("\n\n") }))} />
         <div className="grid gap-4 sm:grid-cols-3">
           <Input label="Date" type="date" value={form.date}
             onChange={(e) => setForm({ ...form, date: e.target.value })} />

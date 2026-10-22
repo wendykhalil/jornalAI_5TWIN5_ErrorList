@@ -7,6 +7,9 @@ import json
 import requests
 import base64
 import uuid
+import tempfile
+import threading
+from pathlib import Path
 
 from langdetect import detect, DetectorFactory, LangDetectException
 
@@ -48,6 +51,9 @@ OLLAMA_VISION_URL = os.getenv(
 
 # Make language detection reproducible
 DetectorFactory.seed = 0
+
+_whisper_model = None
+_whisper_lock = threading.Lock()
 
 
 # ==========================================
@@ -288,6 +294,56 @@ class JournalEntryViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+    # ==========================================
+    # LOCAL WHISPER SPEECH-TO-TEXT (NO AUTO-SAVE)
+    # ==========================================
+    @action(detail=False, methods=["post"], url_path="transcribe")
+    def transcribe(self, request):
+        audio = request.FILES.get("audio")
+        if audio is None:
+            return Response({"error": "Audio file is required."}, status=400)
+        if audio.size <= 0 or audio.size > 15 * 1024 * 1024:
+            return Response({"error": "Audio must be between 1 byte and 15 MB."}, status=400)
+        allowed = {"audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav", "audio/x-wav", "application/octet-stream"}
+        content_type = (audio.content_type or "").split(";")[0].lower()
+        if content_type not in allowed:
+            return Response({"error": "Unsupported audio format."}, status=400)
+        suffix = Path(audio.name or "recording.webm").suffix.lower()
+        if suffix not in {".webm", ".ogg", ".mp4", ".m4a", ".mp3", ".wav"}:
+            return Response({"error": "Unsupported audio extension."}, status=400)
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp:
+                temp_path = temp.name
+                for chunk in audio.chunks():
+                    temp.write(chunk)
+            # Lazy import avoids loading the speech model for normal CRUD requests.
+            from faster_whisper import WhisperModel
+            global _whisper_model
+            with _whisper_lock:
+                if _whisper_model is None:
+                    _whisper_model = WhisperModel(
+                        os.getenv("WHISPER_MODEL", "small"),
+                        device=os.getenv("WHISPER_DEVICE", "cpu"),
+                        compute_type=os.getenv("WHISPER_COMPUTE_TYPE", "int8"),
+                    )
+                segments, info = _whisper_model.transcribe(
+                    temp_path, beam_size=5, vad_filter=True,
+                )
+                text = " ".join(segment.text.strip() for segment in segments).strip()
+            if not text:
+                return Response({"error": "No speech detected. Try recording again."}, status=422)
+            return Response({"text": text, "language": info.language, "model": os.getenv("WHISPER_MODEL", "small")})
+        except Exception:
+            # Avoid returning filesystem paths or internal exceptions to clients.
+            return Response({"error": "Transcription failed. Check Whisper installation and audio format."}, status=503)
+        finally:
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
 
     # ==========================================
     # OPTIONAL AI PHOTO ANALYSIS (NO AUTO-SAVE)
