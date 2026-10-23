@@ -1334,6 +1334,178 @@ class MemorySummaryGenerationTest(TestCase):
         self.assertIn(memory_response.data.get("ai_summary", None), ["", None])
 
 
+class MemorySummarySaveTest(TestCase):
+    """Test saving AI-generated summaries to memories."""
+    
+    def setUp(self):
+        """Set up test user and memory."""
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="testuser",
+            email="test@example.com",
+            password="testpass123"
+        )
+        self.other_user = User.objects.create_user(
+            username="otheruser",
+            email="other@example.com",
+            password="otherpass123"
+        )
+        self.client.force_authenticate(user=self.user)
+        
+        self.memory = Memory.objects.create(
+            user=self.user,
+            title="Test Memory",
+            description="A test memory",
+            event_date=date(2026, 6, 15),
+            location="Test Location",
+            category="Voyages",
+            importance="high",
+            tags=["test"]
+        )
+        
+        self.other_memory = Memory.objects.create(
+            user=self.other_user,
+            title="Other User's Memory",
+            description="Belongs to another user",
+            event_date=date(2026, 6, 20),
+            location="Other Location",
+            category="Amis",
+            importance="medium"
+        )
+    
+    def test_save_summary_success(self):
+        """Test successful save of a generated summary."""
+        response = self.client.post(
+            reverse("memory-save-summary", kwargs={"pk": self.memory.id}),
+            {"summary": "This is a test summary for the memory."},
+            format="json"
+        )
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("ai_summary", response.data)
+        self.assertEqual(response.data["ai_summary"], "This is a test summary for the memory.")
+        
+        # Verify summary was saved to database
+        self.memory.refresh_from_db()
+        self.assertEqual(self.memory.ai_summary, "This is a test summary for the memory.")
+    
+    def test_save_summary_empty(self):
+        """Test that empty summary is rejected."""
+        response = self.client.post(
+            reverse("memory-save-summary", kwargs={"pk": self.memory.id}),
+            {"summary": "   "},
+            format="json"
+        )
+        
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("error", response.data)
+    
+    def test_save_summary_missing(self):
+        """Test that missing summary field is rejected."""
+        response = self.client.post(
+            reverse("memory-save-summary", kwargs={"pk": self.memory.id}),
+            {},
+            format="json"
+        )
+        
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("error", response.data)
+    
+    def test_save_summary_too_long(self):
+        """Test that overly long summary is rejected."""
+        long_summary = "a" * 1001
+        response = self.client.post(
+            reverse("memory-save-summary", kwargs={"pk": self.memory.id}),
+            {"summary": long_summary},
+            format="json"
+        )
+        
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("error", response.data)
+    
+    def test_save_summary_unauthorized_user(self):
+        """Test that user cannot save summary for another user's memory."""
+        response = self.client.post(
+            reverse("memory-save-summary", kwargs={"pk": self.other_memory.id}),
+            {"summary": "Trying to save to another user's memory"},
+            format="json"
+        )
+        
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("error", response.data)
+    
+    def test_save_summary_not_authenticated(self):
+        """Test that unauthenticated users cannot save summaries."""
+        client = APIClient()  # No authentication
+        response = client.post(
+            reverse("memory-save-summary", kwargs={"pk": self.memory.id}),
+            {"summary": "Unauthorized summary"},
+            format="json"
+        )
+        
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+    
+    def test_save_summary_not_found(self):
+        """Test that saving to non-existent memory returns 404."""
+        fake_id = "00000000-0000-0000-0000-000000000000"
+        response = self.client.post(
+            reverse("memory-save-summary", kwargs={"pk": fake_id}),
+            {"summary": "This memory does not exist"},
+            format="json"
+        )
+        
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+    
+    def test_save_summary_max_length(self):
+        """Test saving summary at exactly max length."""
+        max_summary = "a" * 1000
+        response = self.client.post(
+            reverse("memory-save-summary", kwargs={"pk": self.memory.id}),
+            {"summary": max_summary},
+            format="json"
+        )
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.memory.refresh_from_db()
+        self.assertEqual(self.memory.ai_summary, max_summary)
+    
+    def test_save_summary_persistence(self):
+        """Test that saved summary persists when retrieving memory."""
+        summary_text = "This is a persisted summary."
+        
+        # Save summary
+        response = self.client.post(
+            reverse("memory-save-summary", kwargs={"pk": self.memory.id}),
+            {"summary": summary_text},
+            format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        
+        # Retrieve memory
+        get_response = self.client.get(
+            reverse("memory-detail", kwargs={"pk": self.memory.id})
+        )
+        
+        self.assertEqual(get_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(get_response.data["ai_summary"], summary_text)
+    
+    def test_save_summary_overwrite_existing(self):
+        """Test that new summary overwrites existing summary."""
+        # Create memory with existing summary
+        self.memory.ai_summary = "Old summary"
+        self.memory.save()
+        
+        new_summary = "New updated summary"
+        response = self.client.post(
+            reverse("memory-save-summary", kwargs={"pk": self.memory.id}),
+            {"summary": new_summary},
+            format="json"
+        )
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.memory.refresh_from_db()
+        self.assertEqual(self.memory.ai_summary, new_summary)
+
 
 class IntelligentSearchTest(TestCase):
     """Test the intelligent search functionality with Ollama query expansion."""
@@ -2693,3 +2865,383 @@ class SimilarMemoriesCalculationTest(TestCase):
         self.assertNotEqual(bali.location, birthday.location)
         shared_tags = set(bali.tags) & set(birthday.tags)
         self.assertEqual(len(shared_tags), 0)
+
+
+class MemoryPeriodInsightsTest(TestCase):
+    """Test the period insights endpoint (ai/insights/ collection action)."""
+    
+    def setUp(self):
+        """Set up test users and memories for insights tests."""
+        self.user1 = User.objects.create_user(
+            username="user1",
+            email="user1@example.com",
+            password="testpass123"
+        )
+        self.user2 = User.objects.create_user(
+            username="user2",
+            email="user2@example.com",
+            password="testpass123"
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user1)
+        
+        # Create some test memories for user1 in 2026
+        self.memory_jan = Memory.objects.create(
+            user=self.user1,
+            title="Vacation to Paris",
+            description="Amazing trip to the City of Light with museums and cafes",
+            event_date=date(2026, 1, 15),
+            location="Paris",
+            category="Voyages",
+            importance="high",
+            tags=["travel", "france"]
+        )
+        
+        self.memory_feb = Memory.objects.create(
+            user=self.user1,
+            title="Project Completion",
+            description="Successfully finished the AI integration project at work",
+            event_date=date(2026, 2, 20),
+            location="Office",
+            category="Travail",
+            importance="high",
+            tags=["work", "achievement"]
+        )
+        
+        self.memory_mar = Memory.objects.create(
+            user=self.user1,
+            title="Family Dinner",
+            description="Celebrated with family over traditional home-cooked meal",
+            event_date=date(2026, 3, 10),
+            location="Home",
+            category="Événements personnels",
+            importance="medium",
+            tags=["family", "celebration"]
+        )
+        
+        # Draft memory (should not be included)
+        self.memory_draft = Memory.objects.create(
+            user=self.user1,
+            title="Draft Memory",
+            description="This is a draft",
+            event_date=date(2026, 2, 5),
+            draft=True,
+            category="Autres",
+            importance="low",
+            tags=[]
+        )
+        
+        # Memory for user2 (should not appear for user1)
+        self.memory_other_user = Memory.objects.create(
+            user=self.user2,
+            title="User2 Memory",
+            description="This belongs to another user",
+            event_date=date(2026, 1, 20),
+            location="Somewhere",
+            category="Autres",
+            importance="low",
+            tags=[]
+        )
+    
+    def test_period_insights_requires_authentication(self):
+        """Test that period insights endpoint requires authentication."""
+        self.client.force_authenticate(user=None)
+        response = self.client.post(
+            reverse("memory-period-insights"),
+            {
+                "start_date": "2026-01-01",
+                "end_date": "2026-03-31",
+                "period_type": "custom"
+            },
+            format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+    
+    def test_period_insights_missing_start_date(self):
+        """Test that missing start_date returns 400."""
+        response = self.client.post(
+            reverse("memory-period-insights"),
+            {
+                "end_date": "2026-03-31",
+                "period_type": "custom"
+            },
+            format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("error", response.data)
+        self.assertIn("start_date", response.data["error"])
+    
+    def test_period_insights_missing_end_date(self):
+        """Test that missing end_date returns 400."""
+        response = self.client.post(
+            reverse("memory-period-insights"),
+            {
+                "start_date": "2026-01-01",
+                "period_type": "custom"
+            },
+            format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("error", response.data)
+        self.assertIn("end_date", response.data["error"])
+    
+    def test_period_insights_missing_period_type(self):
+        """Test that missing period_type defaults to custom (no error)."""
+        # period_type defaults to "custom" if missing, so no error
+        response = self.client.post(
+            reverse("memory-period-insights"),
+            {
+                "start_date": "2026-01-01",
+                "end_date": "2026-03-31"
+            },
+            format="json"
+        )
+        # Should succeed with default period_type
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+    
+    def test_period_insights_invalid_date_format(self):
+        """Test that invalid date format returns 400."""
+        response = self.client.post(
+            reverse("memory-period-insights"),
+            {
+                "start_date": "01/01/2026",  # Wrong format
+                "end_date": "2026-03-31",
+                "period_type": "custom"
+            },
+            format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+    
+    def test_period_insights_invalid_period_type(self):
+        """Test that invalid period_type returns 400."""
+        response = self.client.post(
+            reverse("memory-period-insights"),
+            {
+                "start_date": "2026-01-01",
+                "end_date": "2026-03-31",
+                "period_type": "invalid"
+            },
+            format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+    
+    def test_period_insights_start_after_end(self):
+        """Test that start_date > end_date returns 400."""
+        response = self.client.post(
+            reverse("memory-period-insights"),
+            {
+                "start_date": "2026-03-31",
+                "end_date": "2026-01-01",
+                "period_type": "custom"
+            },
+            format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+    
+    def test_period_insights_empty_period_no_ollama_call(self):
+        """Test that empty period returns 200 with empty result, no Ollama call."""
+        response = self.client.post(
+            reverse("memory-period-insights"),
+            {
+                "start_date": "2026-06-01",
+                "end_date": "2026-06-30",
+                "period_type": "custom"
+            },
+            format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("Aucun souvenir", response.data["summary"])
+        self.assertEqual(response.data["memory_count"], 0)
+        self.assertIsNone(response.data["model"])
+    
+    @patch("apps.memories.ai_service.requests.post")
+    def test_period_insights_custom_date_range_success(self, mock_post):
+        """Test successful period insights generation for custom date range."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "response": "Entre janvier et mars 2026, vous avez enregistré trois souvenirs marquants : un voyage à Paris, la réussite d'un projet professionnel et une célébration en famille. Ces moments reflètent un équilibre entre aventure, accomplissement et liens familiaux."
+        }
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+        
+        response = self.client.post(
+            reverse("memory-period-insights"),
+            {
+                "start_date": "2026-01-01",
+                "end_date": "2026-03-31",
+                "period_type": "custom"
+            },
+            format="json"
+        )
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("Entre janvier et mars 2026", response.data["summary"])
+        self.assertEqual(response.data["memory_count"], 3)
+        self.assertEqual(response.data["period_type"], "custom")
+        self.assertEqual(response.data["start_date"], "2026-01-01")
+        self.assertEqual(response.data["end_date"], "2026-03-31")
+        self.assertIsNotNone(response.data["model"])
+    
+    @patch("apps.memories.ai_service.requests.post")
+    def test_period_insights_excludes_drafts(self, mock_post):
+        """Test that draft memories are not included in insights."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "response": "Vous avez enregistré un souvenir marquant en février."
+        }
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+        
+        response = self.client.post(
+            reverse("memory-period-insights"),
+            {
+                "start_date": "2026-02-01",
+                "end_date": "2026-02-28",
+                "period_type": "custom"
+            },
+            format="json"
+        )
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # Only the non-draft memory should be counted (memory_feb)
+        self.assertEqual(response.data["memory_count"], 1)
+    
+    @patch("apps.memories.ai_service.requests.post")
+    def test_period_insights_user_isolation(self, mock_post):
+        """Test that users only see their own memories in insights."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "response": "Un souvenir marquant en janvier : un voyage à Paris."
+        }
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+        
+        response = self.client.post(
+            reverse("memory-period-insights"),
+            {
+                "start_date": "2026-01-01",
+                "end_date": "2026-01-31",
+                "period_type": "custom"
+            },
+            format="json"
+        )
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # Only user1's memory (memory_jan) should be counted, not user2's
+        self.assertEqual(response.data["memory_count"], 1)
+    
+    @patch("apps.memories.ai_service.requests.post")
+    def test_period_insights_ollama_timeout(self, mock_post):
+        """Test handling of Ollama timeout error."""
+        from apps.memories.ai_service import OllamaTimeoutError
+        mock_post.side_effect = OllamaTimeoutError("Request timed out")
+        
+        response = self.client.post(
+            reverse("memory-period-insights"),
+            {
+                "start_date": "2026-01-01",
+                "end_date": "2026-03-31",
+                "period_type": "custom"
+            },
+            format="json"
+        )
+        
+        self.assertEqual(response.status_code, status.HTTP_504_GATEWAY_TIMEOUT)
+        self.assertIn("error", response.data)
+        self.assertIn("timed out", response.data["error"].lower())
+    
+    @patch("apps.memories.ai_service.requests.post")
+    def test_period_insights_ollama_unavailable(self, mock_post):
+        """Test handling of Ollama unavailable error."""
+        from apps.memories.ai_service import OllamaUnavailableError
+        mock_post.side_effect = OllamaUnavailableError("Connection refused")
+        
+        response = self.client.post(
+            reverse("memory-period-insights"),
+            {
+                "start_date": "2026-01-01",
+                "end_date": "2026-03-31",
+                "period_type": "custom"
+            },
+            format="json"
+        )
+        
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertIn("error", response.data)
+        self.assertIn("Connection", response.data["error"])
+    
+    @patch("apps.memories.ai_service.requests.post")
+    def test_period_insights_ollama_invalid_response(self, mock_post):
+        """Test handling of invalid Ollama response."""
+        from apps.memories.ai_service import OllamaInvalidResponseError
+        mock_post.side_effect = OllamaInvalidResponseError("Invalid JSON")
+        
+        response = self.client.post(
+            reverse("memory-period-insights"),
+            {
+                "start_date": "2026-01-01",
+                "end_date": "2026-03-31",
+                "period_type": "custom"
+            },
+            format="json"
+        )
+        
+        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        self.assertIn("error", response.data)
+    
+    def test_period_insights_annual_period_type_no_ollama_call(self):
+        """Test annual period type with no memories returns empty result."""
+        response = self.client.post(
+            reverse("memory-period-insights"),
+            {
+                "start_date": "2025-01-01",
+                "end_date": "2025-12-31",
+                "period_type": "year"
+            },
+            format="json"
+        )
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["memory_count"], 0)
+        self.assertEqual(response.data["period_type"], "year")
+    
+    def test_period_insights_monthly_period_type_no_ollama_call(self):
+        """Test monthly period type with no memories returns empty result."""
+        response = self.client.post(
+            reverse("memory-period-insights"),
+            {
+                "start_date": "2026-04-01",
+                "end_date": "2026-04-30",
+                "period_type": "month"
+            },
+            format="json"
+        )
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["memory_count"], 0)
+        self.assertEqual(response.data["period_type"], "month")
+    
+    @patch("apps.memories.ai_service.requests.post")
+    def test_period_insights_response_format(self, mock_post):
+        """Test that response includes all required fields."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "response": "Test summary about the period with several memories analyzed."
+        }
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+        
+        response = self.client.post(
+            reverse("memory-period-insights"),
+            {
+                "start_date": "2026-01-01",
+                "end_date": "2026-03-31",
+                "period_type": "custom"
+            },
+            format="json"
+        )
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        required_fields = ["summary", "memory_count", "period_type", "start_date", "end_date", "model"]
+        for field in required_fields:
+            self.assertIn(field, response.data)
