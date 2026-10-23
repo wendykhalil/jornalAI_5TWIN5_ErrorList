@@ -856,7 +856,14 @@ export function MemoryDetail() {
   const m = memories.find((x) => x.id === id)
   
   useEffect(() => {
-    if (id) memoryService.getSimilarMemories(id).then(setSimilar)
+    if (id) {
+      memoryService.getSimilarMemories(id, memories)
+        .then(setSimilar)
+        .catch((error) => {
+          console.error('[MemoryDetail] Error fetching similar memories:', error)
+          setSimilar([]) // Treat errors as no results (prevent crashes)
+        })
+    }
   }, [id, memories])
   
   // Generate summary via real AI
