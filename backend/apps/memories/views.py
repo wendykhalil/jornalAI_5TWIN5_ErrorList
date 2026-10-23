@@ -1,4 +1,5 @@
 from rest_framework import viewsets, status
+from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -10,6 +11,7 @@ from .ai_service import (
     suggest_category,
     suggest_tags,
     generate_summary,
+    generate_period_insights,
     expand_search_query,
     OllamaError,
     OllamaTimeoutError,
@@ -258,6 +260,227 @@ class MemoryViewSet(viewsets.ModelViewSet):
                 tags=tags,
                 location=location
             )
+            return Response(result, status=status.HTTP_200_OK)
+        
+        except ValueError as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        except OllamaTimeoutError as e:
+            return Response(
+                {"error": str(e), "type": "timeout"},
+                status=status.HTTP_504_GATEWAY_TIMEOUT
+            )
+        
+        except OllamaUnavailableError as e:
+            return Response(
+                {"error": str(e), "type": "unavailable"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        
+        except OllamaInvalidResponseError as e:
+            return Response(
+                {"error": str(e), "type": "invalid_response"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        except OllamaError as e:
+            return Response(
+                {"error": str(e), "type": "ollama_error"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="save-summary",
+        url_name="save-summary"
+    )
+    def save_summary_action(self, request, pk=None):
+        """
+        Save an AI-generated summary to a memory's ai_summary field.
+        
+        POST /api/memories/{id}/save-summary/
+        
+        Request body:
+        {
+            "summary": "string (required, non-empty, max 1000 chars)"
+        }
+        
+        Response (200 OK):
+        {
+            "id": "memory_id",
+            "ai_summary": "saved summary",
+            "message": "Summary saved successfully"
+        }
+        
+        Error responses:
+        - 400: Invalid input (empty or missing summary, exceeds max length)
+        - 401: Not authenticated
+        - 403: User does not own this memory
+        - 404: Memory not found
+        """
+        # Get memory by pk without filtering by current user
+        # This allows us to distinguish between 403 (unauthorized) and 404 (not found)
+        try:
+            memory = Memory.objects.get(pk=pk)
+        except Memory.DoesNotExist:
+            return Response(
+                {"error": "Memory not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Authorization check: user must own the memory
+        if memory.user != request.user:
+            return Response(
+                {"error": "You do not have permission to update this memory."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        summary = request.data.get("summary", "").strip()
+        
+        if not summary:
+            return Response(
+                {"error": "Summary is required and cannot be empty."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if len(summary) > 1000:
+            return Response(
+                {"error": "Summary must not exceed 1000 characters."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            memory.ai_summary = summary
+            memory.save(update_fields=['ai_summary'])
+            
+            return Response({
+                "id": memory.id,
+                "ai_summary": memory.ai_summary,
+                "message": "Summary saved successfully"
+            }, status=status.HTTP_200_OK)
+        
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to save summary: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    # ==========================================
+    # PERIOD INSIGHTS ENDPOINT
+    # ==========================================
+    
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="ai/insights",
+        url_name="period-insights"
+    )
+    def period_insights_action(self, request):
+        """
+        Generate an AI-powered summary of memories for a date period.
+        
+        POST /api/memories/ai/insights/
+        
+        Request body:
+        {
+            "start_date": "2026-01-01" (required, YYYY-MM-DD format),
+            "end_date": "2026-12-31" (required, YYYY-MM-DD format),
+            "period_type": "year" (optional: "year", "month", "custom"; defaults to "custom")
+        }
+        
+        Response:
+        {
+            "summary": "2-8 sentence French summary of the period",
+            "memory_count": 8,
+            "period_type": "year",
+            "start_date": "2026-01-01",
+            "end_date": "2026-12-31",
+            "model": "qwen2.5:3b"
+        }
+        
+        Error responses:
+        - 400: Invalid input (missing dates, empty period, invalid format)
+        - 503: Ollama unavailable
+        - 504: Ollama timeout
+        - 500: Other errors
+        """
+        start_date = request.data.get("start_date", "").strip()
+        end_date = request.data.get("end_date", "").strip()
+        period_type = request.data.get("period_type", "custom").strip()
+        
+        # Validate inputs
+        if not start_date:
+            return Response(
+                {"error": "start_date is required (format: YYYY-MM-DD)."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not end_date:
+            return Response(
+                {"error": "end_date is required (format: YYYY-MM-DD)."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if period_type not in ("year", "month", "custom"):
+            return Response(
+                {"error": "period_type must be 'year', 'month', or 'custom'."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validate date format
+        try:
+            from datetime import datetime
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
+        except ValueError:
+            return Response(
+                {"error": "Dates must be in YYYY-MM-DD format."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if start_dt > end_dt:
+            return Response(
+                {"error": "start_date must be before or equal to end_date."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            # Fetch current user's memories in the date range
+            memories = self.get_queryset().filter(
+                event_date__gte=start_dt,
+                event_date__lte=end_dt,
+                draft=False  # Only published memories
+            ).order_by("-event_date")
+            
+            if not memories.exists():
+                return Response(
+                    {
+                        "summary": "Aucun souvenir ne correspond à cette période. Choisissez une autre plage pour générer un résumé.",
+                        "memory_count": 0,
+                        "period_type": period_type,
+                        "start_date": start_date,
+                        "end_date": end_date,
+                        "model": None
+                    },
+                    status=status.HTTP_200_OK
+                )
+            
+            # Convert memories to dicts for AI service
+            serializer = MemorySerializer(memories, many=True)
+            memories_data = serializer.data
+            
+            # Generate AI summary
+            result = generate_period_insights(
+                memories_data=memories_data,
+                start_date=start_date,
+                end_date=end_date,
+                period_type=period_type
+            )
+            
             return Response(result, status=status.HTTP_200_OK)
         
         except ValueError as e:
