@@ -283,49 +283,228 @@ export const memoryService = {
   },
 
   /**
-   * Get similar memories based on shared category, tags, and location.
+   * French stop words to exclude from keyword matching
+   * These are common words that add no semantic value
+   * @private
+   */
+  _FRENCH_STOP_WORDS: new Set([
+    // Articles
+    'avec', 'sans', 'dans', 'pour', 'par', 'sur', 'sous', 'entre',
+    'vers', 'chez', 'depuis', 'pendant', 'après', 'avant', 'lors',
+    // Common prepositions and conjunctions
+    'mais', 'donc', 'soit', 'bien', 'très', 'plus', 'moins', 'tant',
+    'comme', 'alors', 'aussi', 'encore', 'toujours', 'jamais',
+    // Common adjectives/adverbs
+    'autre', 'même', 'seul', 'tel', 'quel', 'nouveau', 'dernier',
+    'premier', 'ancien', 'bon', 'mauvais', 'grand', 'petit', 'haut',
+    'bas', 'long', 'court', 'large', 'étroit', 'fort', 'faible',
+    'special', 'spéciale', 'délicieux', 'délicieuse', 'magnifique',
+    'merveilleux', 'formidable', 'génial', 'fantastique', 'super',
+    'incroyable', 'inoubliable', 'important', 'impossible', 'possible',
+    // Common generic words
+    'moment', 'jour', 'temps', 'heure', 'fois', 'chose', 'pied',
+    'main', 'tête', 'cœur', 'envie', 'besoin', 'raison', 'façon',
+    'sorte', 'genre', 'espèce', 'type', 'kind', 'sort', 'partie',
+    'morceau', 'coin', 'endroit', 'pôle', 'place', 'espace', 'zone',
+    'région', 'zone', 'aire', 'monde', 'univers', 'vie', 'mort',
+    // Verbs (infinitive forms and conjugations)
+    'avoir', 'être', 'faire', 'aller', 'venir', 'pouvoir', 'vouloir',
+    'devoir', 'savoir', 'falloir', 'valoir', 'oser', 'daigner',
+    'penser', 'croire', 'savoir', 'sentir', 'voir', 'entendre',
+    'trouver', 'laisser', 'donner', 'prendre', 'mettre', 'porter',
+    'apporter', 'emporter', 'garder', 'perdre', 'laisser', 'trouver',
+    'passer', 'marcher', 'courir', 'venir', 'entrer', 'sortir',
+    // Pronouns
+    'nous', 'vous', 'elles', 'tous', 'aucun', 'quelque', 'certains',
+    'plusieurs', 'chacun', 'chaque',
+  ]),
+
+  /**
+   * Extract keywords from text for similarity matching
+   * Filters out French stop words and very generic adjectives
+   * Handles French accented characters (é, è, ê, à, ù, etc.)
+   * @private
+   */
+  _extractKeywords: (text) => {
+    if (!text) return []
+    const STOP_WORDS = memoryService._FRENCH_STOP_WORDS
+    return text
+      .toLowerCase()
+      // FIXED: Preserve French accented characters (àâäéèêëïîôùûüœæç)
+      .replace(/[^\wàâäéèêëïîôùûüœæç\s-]/g, ' ') // Remove punctuation but keep accents
+      .split(/\s+/)
+      .filter((w) => w.length > 3) // Only words > 3 chars
+      .filter((w) => !STOP_WORDS.has(w)) // Exclude stop words
+      .filter((w, i, arr) => arr.indexOf(w) === i) // Deduplicate
+  },
+
+  /**
+   * Calculate relevance score between two memories (0-1 range)
+   * Uses multi-signal approach optimized to distinguish related from unrelated memories.
+   * 
+   * Scoring Strategy:
+   * - Strong structural match (category + location): Foundation for recommendation
+   * - Meaningful shared tags: Secondary signal confirming relationship
+   * - Title/Description: Tertiary signal for exact or near-duplicate detection
+   * - Description keyword threshold: ≥3 when category/location match (related context)
+   *                                   ≥4 when category/location differ (must have strong content overlap)
+   * 
+   * This prevents:
+   * - Birthday→AI project (different category/location, no content overlap)
+   * - Bali→Birthday (different category/location, no content overlap)
+   * While allowing:
+   * - Birthday→Birthday duplicate (same category, location, tags, description)
+   * - Bali→Bali duplicate (same category, location, tags, description)
+   * - AI→WebExam (same category, location, shared tags)
+   * 
+   * @private
+   */
+  _calculateSimilarityScore: (current, candidate, debug = false) => {
+    let score = 0
+    const signals = {}
+    
+    // 1. CATEGORY MATCH (weight: 6)
+    const categoryMatch = current.category === candidate.category
+    if (categoryMatch) {
+      score += 6
+      signals.category = 6
+    } else {
+      signals.category = 0
+    }
+    
+    // 2. LOCATION MATCH (weight: 8 - highest specificity)
+    const currLoc = (current.location || '').trim().toLowerCase()
+    const candLoc = (candidate.location || '').trim().toLowerCase()
+    const locationMatch = currLoc && candLoc && currLoc === candLoc
+    if (locationMatch) {
+      score += 8
+      signals.location = 8
+    } else {
+      signals.location = 0
+    }
+    
+    // Determine if there is a structural match (used for description threshold)
+    const hasStructuralMatch = categoryMatch || locationMatch
+    
+    // 3. TAG MATCHES (weight: 2 per tag, max 6)
+    const currTagSet = new Set(
+      (current.tags || []).map((t) => t.toLowerCase().trim()).filter(Boolean)
+    )
+    const candTagSet = new Set(
+      (candidate.tags || []).map((t) => t.toLowerCase().trim()).filter(Boolean)
+    )
+    const sharedTags = [...currTagSet].filter((t) => candTagSet.has(t))
+    const tagScore = Math.min(sharedTags.length * 2, 6)
+    score += tagScore
+    signals.tags = tagScore
+    signals.sharedTagCount = sharedTags.length
+    
+    // 4. TITLE SIMILARITY (weight: 4)
+    const currTitle = (current.title || '').toLowerCase()
+    const candTitle = (candidate.title || '').toLowerCase()
+    let titleScore = 0
+    if (currTitle && candTitle && currTitle.length > 5 && candTitle.length > 5) {
+      const currWords = memoryService._extractKeywords(currTitle)
+      const candWords = memoryService._extractKeywords(candTitle)
+      const sharedWords = currWords.filter((w) => candWords.includes(w))
+      if (sharedWords.length > 0) {
+        titleScore = 4
+        score += titleScore
+      }
+    }
+    signals.title = titleScore
+    
+    // 5. DESCRIPTION KEYWORD OVERLAP (weight: 6)
+    // ADAPTIVE THRESHOLD: Stricter when categories/locations differ
+    // - If category AND location match: threshold = ≥3 (related context)
+    // - If category OR location match: threshold = ≥3 (some structural alignment)
+    // - If neither match: threshold = ≥4 (must have strong content overlap)
+    let descScore = 0
+    let overlapCount = 0
+    const descriptionThreshold = hasStructuralMatch ? 3 : 4
+    if (current.description && candidate.description) {
+      const currWords = memoryService._extractKeywords(current.description)
+      const candWords = memoryService._extractKeywords(candidate.description)
+      overlapCount = currWords.filter((w) => candWords.includes(w)).length
+      
+      if (overlapCount >= descriptionThreshold) {
+        descScore = Math.min(overlapCount, 6)
+        score += descScore
+      }
+    }
+    signals.description = descScore
+    signals.descOverlapCount = overlapCount
+    signals.descriptionThreshold = descriptionThreshold
+    
+    // NORMALIZATION
+    // Max possible score: 6 + 8 + 6 + 4 + 6 = 30 points
+    const maxScore = 30
+    const normalizedScore = score / maxScore
+    
+    // Optional debug logging
+    if (debug) {
+      console.debug(`[SimilarMemories] "${current.title}" vs "${candidate.title}":`, {
+        signals,
+        rawScore: score,
+        normalizedScore: normalizedScore.toFixed(2),
+        threshold: 0.40,
+        passes: normalizedScore >= 0.40,
+      })
+    }
+    
+    return normalizedScore // Returns 0-1 range
+  },
+
+  /**
+   * Get similar memories based on multi-signal relevance scoring.
+   * Considers: category, location, tags, title similarity, and description keywords.
+   * Returns only memories above configurable relevance threshold.
+   * 
    * Frontend-side filtering: load all and filter locally.
-   * Ranks by relevance: shared category, number of shared tags, matching location.
+   * Ranked by normalized relevance score (0-1 range).
    * 
    * @param {string} id - Memory ID to find similar memories for
-   * @returns {Promise<Array>} - Up to 4 similar memories, ranked by relevance
+   * @param {Array} allMemories - Optional: pre-fetched array of all memories. If provided, uses this instead of fetching fresh
+   * @param {boolean} debug - Optional: enable console logging of scoring for all candidates
+   * @returns {Promise<Array>} - Up to 4 similar memories, ranked by relevance score
    */
-  getSimilarMemories: async (id) => {
-    const all = await memoryService.getMemories()
+  getSimilarMemories: async (id, allMemories = null, debug = false) => {
+    // Use provided memories array or fetch fresh if not provided
+    const all = allMemories || await memoryService.getMemories()
     const current = all.find((x) => x.id === id)
 
     if (!current) return []
 
-    // Calculate relevance score for each potential match
+    // Configuration: minimum relevance threshold (0-1 range)
+    const MINIMUM_RELEVANCE_THRESHOLD = 0.40 // 40% of max score required
+    const MAX_RESULTS = 4
+
+    if (debug) {
+      console.debug(`[SimilarMemories] Finding similar memories for: "${current.title}"`)
+      console.debug(`[SimilarMemories] Total candidates to evaluate: ${all.length - 1}`)
+    }
+
+    // Calculate similarity scores for all candidates
     const scored = all
-      .filter((x) => x.id !== id) // Exclude current memory
-      .map((x) => {
-        let score = 0
-        
-        // Category match (highest weight: 3 points)
-        if (x.category === current.category) {
-          score += 3
+      .filter((x) => x.id !== id) // Exclude current memory from recommendations
+      .map((x) => ({
+        memory: x,
+        score: memoryService._calculateSimilarityScore(current, x, debug),
+      }))
+      .filter((item) => {
+        const passes = item.score >= MINIMUM_RELEVANCE_THRESHOLD
+        if (debug && passes) {
+          console.debug(`[SimilarMemories] ✓ PASSES threshold: "${item.memory.title}" (score: ${(item.score * 100).toFixed(1)}%)`)
         }
-        
-        // Shared tags (1 point per shared tag, max 2)
-        const sharedTagCount = x.tags.filter((t) =>
-          current.tags.some((ct) => ct.toLowerCase().trim() === t.toLowerCase().trim())
-        ).length
-        score += Math.min(sharedTagCount, 2)
-        
-        // Location match: only if both non-empty and identical (case-insensitive)
-        const currentLocation = (current.location || '').trim().toLowerCase()
-        const xLocation = (x.location || '').trim().toLowerCase()
-        if (currentLocation && xLocation && currentLocation === xLocation) {
-          score += 1
-        }
-        
-        return { memory: x, score }
+        return passes
       })
-      .filter((item) => item.score > 0) // Only keep memories with at least one match
       .sort((a, b) => b.score - a.score) // Sort by score descending
-      .slice(0, 4) // Take top 4
+      .slice(0, MAX_RESULTS) // Limit to max results
       .map((item) => item.memory) // Extract memory objects
+
+    if (debug) {
+      console.debug(`[SimilarMemories] Found ${scored.length} similar memories (threshold: ${(MINIMUM_RELEVANCE_THRESHOLD * 100).toFixed(0)}%)`)
+    }
 
     return scored
   },
