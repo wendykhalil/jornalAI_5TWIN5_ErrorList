@@ -629,4 +629,88 @@ export const memoryService = {
       throw error
     }
   },
+
+  /**
+   * Save a generated summary to a memory's ai_summary field.
+   * Only the memory owner (authenticated user) can save summaries.
+   * 
+   * @param {string} id - Memory ID
+   * @param {string} summary - Summary text to save (required, non-empty, max 1000 chars)
+   * @returns {Promise<Object>} { id, ai_summary, message }
+   * @throws {Error} If summary invalid, network error, or user not authorized
+   */
+  saveMemorySummary: async (id, summary) => {
+    if (!id) {
+      throw new Error("Memory ID is required")
+    }
+
+    if (!summary || !summary.trim()) {
+      throw new Error("Summary is required and cannot be empty")
+    }
+
+    if (summary.length > 1000) {
+      throw new Error("Summary must not exceed 1000 characters")
+    }
+
+    try {
+      const response = await memoryRequest(`${encodeURIComponent(id)}/save-summary/`, {
+        method: "POST",
+        body: JSON.stringify({ summary: summary.trim() }),
+      })
+      return response
+    } catch (error) {
+      if (error.message.includes("403")) {
+        throw new Error("You do not have permission to save this memory's summary")
+      }
+      if (error.message.includes("404")) {
+        throw new Error("Memory not found")
+      }
+      throw error
+    }
+  },
+
+  generateInsights: async (startDate, endDate, periodType) => {
+    // Validate date format (YYYY-MM-DD)
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/
+    if (!dateRegex.test(startDate) || !dateRegex.test(endDate)) {
+      throw new Error("Dates must be in YYYY-MM-DD format")
+    }
+
+    // Validate period type
+    const validPeriods = ["year", "month", "custom"]
+    if (!validPeriods.includes(periodType)) {
+      throw new Error(`Period type must be one of: ${validPeriods.join(", ")}`)
+    }
+
+    try {
+      const response = await memoryRequest("ai/insights/", {
+        method: "POST",
+        body: JSON.stringify({
+          start_date: startDate,
+          end_date: endDate,
+          period_type: periodType,
+        }),
+      })
+      return response
+    } catch (error) {
+      // Map backend error messages to user-friendly frontend messages
+      if (error.message.includes("timed out") || error.message.includes("504")) {
+        throw new Error(
+          "The AI summary generation timed out. Please try again or use a shorter date range."
+        )
+      }
+      if (error.message.includes("unavailable") || error.message.includes("503")) {
+        throw new Error(
+          "The AI service is currently unavailable. Please try again in a few moments."
+        )
+      }
+      if (error.message.includes("invalid response") || error.message.includes("500")) {
+        throw new Error(
+          "The AI service encountered an error processing your memories. Please try again."
+        )
+      }
+      throw error
+    }
+  },
 }
+
