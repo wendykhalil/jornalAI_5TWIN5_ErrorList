@@ -148,7 +148,7 @@ function MemoryCard({ memory, view = "grid", onDelete }) {
                   : "text-slate-300"
               }
             />
-            {memory.importance.includes("high") && (
+            {(memory.importance === "high" || memory.importance === "very-high") && (
               <span className="text-xs font-bold text-amber-600">
                 Important
               </span>
@@ -281,7 +281,7 @@ export function MemoriesList() {
         />
         <Stat
           label="Souvenirs importants"
-          value={memories.filter((x) => x.importance.includes("high")).length}
+          value={memories.filter((x) => x.importance === "high" || x.importance === "very-high").length}
         />
         <Stat
           label="Catégories utilisées"
@@ -851,6 +851,7 @@ export function MemoryDetail() {
     [similar, setSimilar] = useState([]),
     [summary, setSummary] = useState(""),
     [summaryLoading, setSummaryLoading] = useState(false),
+    [summarySaving, setSummarySaving] = useState(false),
     [summaryError, setSummaryError] = useState("")
   
   const m = memories.find((x) => x.id === id)
@@ -887,6 +888,26 @@ export function MemoryDetail() {
       console.error("Summary generation error:", error)
     } finally {
       setSummaryLoading(false)
+    }
+  }
+
+  // Save generated summary to memory
+  const saveSummary = async () => {
+    if (!m || !summary) return
+
+    setSummarySaving(true)
+    setSummaryError("")
+
+    try {
+      await memoryService.saveMemorySummary(m.id, summary)
+      // Refresh memory from store to display saved summary
+      notify("Résumé enregistré avec succès")
+      setSummary("") // Clear local state; will load from m.aiSummary
+    } catch (error) {
+      setSummaryError(error.message || "Erreur lors de l'enregistrement du résumé")
+      console.error("Summary save error:", error)
+    } finally {
+      setSummarySaving(false)
     }
   }
   
@@ -1057,11 +1078,35 @@ export function MemoryDetail() {
               variant="ai"
               className="mt-4 w-full"
               onClick={generateSummary}
-              disabled={summaryLoading}
+              disabled={summaryLoading || summarySaving}
             >
               <RefreshCw size={16} />
               {summaryLoading ? "Génération..." : summary || m.aiSummary ? "Régénérer" : "Générer"}
             </Button>
+
+            {/* Show unsaved indicator */}
+            {summary && !m.aiSummary && (
+              <p className="mt-2 text-xs text-amber-600">
+                ⚠️ Ce résumé n'est pas encore enregistré. Il sera perdu si vous quittez la page.
+              </p>
+            )}
+
+            {/* Save button (only show if summary generated but not yet saved) */}
+            {summary && !m.aiSummary && (
+              <Button
+                variant="secondary"
+                className="mt-2 w-full"
+                onClick={saveSummary}
+                disabled={summarySaving || !summary}
+              >
+                {summarySaving ? "Enregistrement..." : "Enregistrer le résumé"}
+              </Button>
+            )}
+
+            {/* Error message */}
+            {summaryError && (
+              <p className="mt-2 text-sm text-red-600">{summaryError}</p>
+            )}
           </Card>
           <Card className="p-5">
             <h2 className="font-extrabold">Suggestions IA</h2>
@@ -1336,21 +1381,51 @@ export function MemoryCalendar() {
 export function MemoryInsights() {
   const { memories, notify } = useStore(),
     [period, setPeriod] = useState("year"),
-    [start, setStart] = useState("2025-01-01"),
-    [end, setEnd] = useState("2025-12-31"),
+    [customStart, setCustomStart] = useState("2026-01-01"),
+    [customEnd, setCustomEnd] = useState("2026-12-31"),
     [loading, setLoading] = useState(false),
     [result, setResult] = useState(null),
     [saved, setSaved] = useState(() =>
       JSON.parse(localStorage.getItem("mindlog_summaries") || "[]"),
     )
-  const range =
-    period === "month"
-      ? ["2026-02-01", "2026-02-28"]
-      : period === "year"
-        ? ["2025-01-01", "2025-12-31"]
-        : [start, end]
+
+  // Helper: Get current year range
+  const getCurrentYearRange = () => {
+    const now = new Date()
+    const year = now.getFullYear()
+    return [`${year}-01-01`, `${year}-12-31`]
+  }
+
+  // Helper: Get current month range
+  const getCurrentMonthRange = () => {
+    const now = new Date()
+    const year = now.getFullYear()
+    const month = String(now.getMonth() + 1).padStart(2, "0")
+    const lastDay = new Date(year, now.getMonth() + 1, 0).getDate()
+    return [`${year}-${month}-01`, `${year}-${month}-${lastDay}`]
+  }
+
+  // Determine the current effective date range based on period selection
+  const getEffectiveRange = () => {
+    if (period === "month") {
+      return getCurrentMonthRange()
+    } else if (period === "year") {
+      return getCurrentYearRange()
+    } else {
+      // custom period
+      return [customStart, customEnd]
+    }
+  }
+
+  const range = getEffectiveRange()
+
+  // Clear result whenever period or custom dates change
+  useEffect(() => {
+    setResult(null)
+  }, [period, customStart, customEnd])
+
   const items = memories.filter(
-    (x) => x.eventDate >= range[0] && x.eventDate <= range[1],
+    (x) => x.eventDate >= range[0] && x.eventDate <= range[1] && !x.draft,
   )
   const counts = Object.entries(
     items.reduce(
@@ -1365,36 +1440,51 @@ export function MemoryInsights() {
   )
     .sort((a, b) => b[1] - a[1])
     .slice(0, 8)
-  const generate = () => {
+  const generate = async () => {
     if (range[0] > range[1]) {
       notify("La date de début doit précéder la date de fin.", "error")
       return
     }
     setLoading(true)
-    setTimeout(() => {
-      const top =
-        counts.sort((a, b) => b.value - a.value)[0]?.name ||
-        "moments personnels"
-      const titles = items.slice(0, 3).map((x) => x.title)
-      const text = items.length
-        ? `Sur cette période, vous avez conservé ${items.length} souvenir${
-            items.length > 1 ? "s" : ""
-          }, principalement autour de ${top.toLowerCase()}. Vous avez notamment enregistré ${titles.join(", ")}. Ces moments reflètent les expériences que vous avez choisi de préserver.`
-        : "Aucun souvenir ne correspond à cette période. Choisissez une autre plage pour générer un résumé fidèle."
+    setResult(null) // Clear previous result when generating
+
+    try {
+      const currentRange = getEffectiveRange()
+      const currentItems = memories.filter(
+        (x) => x.eventDate >= currentRange[0] && x.eventDate <= currentRange[1] && !x.draft,
+      )
+
+      const response = await memoryService.generateInsights(
+        currentRange[0],
+        currentRange[1],
+        period,
+      )
+
       const out = {
         id: crypto.randomUUID(),
-        text,
-        start: range[0],
-        end: range[1],
-        memoryIds: items.map((x) => x.id),
+        text: response.summary,
+        start: currentRange[0],
+        end: currentRange[1],
+        memoryIds: currentItems.map((x) => x.id),
         createdAt: new Date().toISOString(),
+        model: response.model,
+        memoryCount: response.memory_count,
+        source: "ollama", // Mark as real Ollama-generated summary
       }
+
       setResult(out)
-      const next = [out, ...saved].slice(0, 5)
-      setSaved(next)
-      localStorage.setItem("mindlog_summaries", JSON.stringify(next))
+
+      // Only save to localStorage if there are memories found
+      if (currentItems.length > 0) {
+        const next = [out, ...saved].slice(0, 5)
+        setSaved(next)
+        localStorage.setItem("mindlog_summaries", JSON.stringify(next))
+      }
+    } catch (error) {
+      notify(error.message, "error")
+    } finally {
       setLoading(false)
-    }, 800)
+    }
   }
   return (
     <>
@@ -1413,7 +1503,7 @@ export function MemoryInsights() {
         <Stat label="Souvenirs enregistrés" value={memories.length} />
         <Stat
           label="Souvenirs importants"
-          value={memories.filter((x) => x.importance.includes("high")).length}
+          value={memories.filter((x) => x.importance === "high" || x.importance === "very-high").length}
         />
         <Stat
           label="Catégorie fréquente"
@@ -1446,14 +1536,14 @@ export function MemoryInsights() {
               <Input
                 label="Date de début"
                 type="date"
-                value={start}
-                onChange={(e) => setStart(e.target.value)}
+                value={customStart}
+                onChange={(e) => setCustomStart(e.target.value)}
               />
               <Input
                 label="Date de fin"
                 type="date"
-                value={end}
-                onChange={(e) => setEnd(e.target.value)}
+                value={customEnd}
+                onChange={(e) => setCustomEnd(e.target.value)}
               />
             </>
           )}
@@ -1463,15 +1553,20 @@ export function MemoryInsights() {
           </Button>
         </div>
         {loading && <Loading label="Analyse des souvenirs sélectionnés..." />}
-        {result && (
+        {result && items.length > 0 && (
           <div className="mt-6 rounded-2xl border border-cyan-200 bg-cyan-50 p-6">
-            <Badge className="bg-white text-cyan-700">Sortie IA simulée</Badge>
+            <div className="flex items-center gap-2">
+              <Badge className="bg-white text-cyan-700">Sortie IA</Badge>
+              {result.model && (
+                <span className="text-xs text-cyan-600">Modèle : {result.model}</span>
+              )}
+            </div>
             <p className="mt-4 text-base leading-8 text-cyan-950">
               {result.text}
             </p>
             <p className="mt-3 text-xs text-cyan-700">
               Période : {fmt(result.start)} — {fmt(result.end)} ·{" "}
-              {result.memoryIds.length} souvenir(s) utilisé(s)
+              {result.memoryCount || result.memoryIds.length} souvenir(s) utilisé(s)
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
               {items.map((x) => (
@@ -1480,8 +1575,22 @@ export function MemoryInsights() {
                 </Link>
               ))}
             </div>
-            <Button variant="ai" className="mt-4" onClick={generate}>
+            <Button variant="ai" className="mt-4" onClick={generate} disabled={loading}>
               <RefreshCw /> Régénérer
+            </Button>
+          </div>
+        )}
+        {result && items.length === 0 && (
+          <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-6">
+            <Badge className="bg-white text-amber-700">Aucun résultat</Badge>
+            <p className="mt-4 text-base leading-8 text-amber-950">
+              {result.text}
+            </p>
+            <p className="mt-3 text-xs text-amber-700">
+              Période : {fmt(result.start)} — {fmt(result.end)}
+            </p>
+            <Button variant="secondary" className="mt-4" onClick={generate}>
+              <RefreshCw /> Essayer une autre période
             </Button>
           </div>
         )}
@@ -1516,7 +1625,7 @@ export function MemoryInsights() {
           />
           <div className="space-y-2">
             {items
-              .filter((x) => x.importance.includes("high"))
+              .filter((x) => x.importance === "high" || x.importance === "very-high")
               .slice(0, 4)
               .map((x) => (
                 <Link
@@ -1543,7 +1652,14 @@ export function MemoryInsights() {
           <div className="space-y-3">
             {saved.map((x) => (
               <div key={x.id} className="rounded-xl bg-slate-50 p-4">
-                <p className="line-clamp-2 text-sm">{x.text}</p>
+                <div className="flex items-start justify-between gap-2">
+                  <p className="line-clamp-2 flex-1 text-sm">{x.text}</p>
+                  {!x.source && (
+                    <span className="whitespace-nowrap rounded bg-amber-100 px-2 py-1 text-xs text-amber-700">
+                      Simulé
+                    </span>
+                  )}
+                </div>
                 <p className="mt-2 text-xs text-slate-400">
                   {fmt(x.start)} — {fmt(x.end)}
                 </p>
