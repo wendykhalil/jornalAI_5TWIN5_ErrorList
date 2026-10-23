@@ -470,6 +470,153 @@ Now write a concise French summary of this memory:
         )
 
 
+def generate_period_insights(
+    memories_data: List[Dict[str, any]],
+    start_date: str,
+    end_date: str,
+    period_type: str = "custom"
+) -> Dict[str, any]:
+    """
+    Generate an AI-powered summary of memories within a date period.
+    
+    Args:
+        memories_data: List of memory dicts with title, description, category, tags, location, eventDate
+        start_date: ISO format date string (YYYY-MM-DD)
+        end_date: ISO format date string (YYYY-MM-DD)
+        period_type: "month", "year", or "custom"
+    
+    Returns:
+        Dict with:
+        - summary: str (2-8 sentence French summary of the period)
+        - memory_count: int (number of memories analyzed)
+        - period_type: str
+        - start_date: str
+        - end_date: str
+        - model: str (model name used)
+    
+    Raises:
+        OllamaTimeoutError: If request times out
+        OllamaUnavailableError: If server unreachable
+        OllamaInvalidResponseError: If response is invalid
+        ValueError: If no memories or invalid date range
+    """
+    if not memories_data:
+        raise ValueError("No memories found in the selected period.")
+    
+    if len(memories_data) > 50:
+        # Limit to most recent 50 memories to avoid token limit
+        memories_data = memories_data[:50]
+    
+    # Build context from memories
+    memory_summaries = []
+    for i, mem in enumerate(memories_data, 1):
+        title = mem.get("title", "").strip()[:100]
+        description = mem.get("description", "").strip()[:300]
+        category = mem.get("category", "").strip()[:50]
+        location = mem.get("location", "").strip()[:50]
+        tags = mem.get("tags", [])
+        
+        tag_str = ", ".join(tags[:3]) if tags else ""
+        
+        parts = [title, description]
+        if category:
+            parts.append(f"(Catégorie: {category})")
+        if location:
+            parts.append(f"(Lieu: {location})")
+        if tag_str:
+            parts.append(f"[Tags: {tag_str}]")
+        
+        summary = " ".join(p for p in parts if p)
+        memory_summaries.append(f"{i}. {summary}")
+    
+    memories_context = "\n".join(memory_summaries)
+    
+    # Determine period label
+    period_label = {
+        "month": "ce mois",
+        "year": "cette année",
+        "custom": "cette période"
+    }.get(period_type, "cette période")
+    
+    prompt = f"""Tu rédiges une synthèse descriptive pour un journal personnel basée sur les souvenirs enregistrés.
+
+TÂCHE:
+Analyse les souvenirs ci-dessous et écris une synthèse cohérente de {period_label} ({start_date} à {end_date}).
+
+RÈGLES ESSENTIELLES:
+- Écris en français.
+- N'utilise QUE les informations présentes dans les souvenirs fournis.
+- N'invente AUCUN événement, personne, lieu, date ou expérience.
+- Décris les thèmes, expériences significatives et moments importants soutenus par les souvenirs.
+- Si les souvenirs contiennent peu d'informations, reconnais cette limitation explicitement.
+- Reste neutre, respectueux et non-jugmental.
+- Longueur: 3-8 phrases maximum.
+- N'inclus pas de Markdown ou de formatage spécial.
+- Réponds UNIQUEMENT avec le texte de la synthèse, rien d'autre.
+
+SOUVENIRS ({len(memories_data)} souvenir(s)):
+{memories_context}
+
+Synthèse de {period_label}:
+"""
+    
+    payload = {
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "options": {
+            "temperature": 0.3,
+            "num_predict": 500
+        }
+    }
+    
+    try:
+        response = requests.post(
+            OLLAMA_URL,
+            json=payload,
+            timeout=OLLAMA_TIMEOUT
+        )
+        response.raise_for_status()
+        
+        result = response.json()
+        summary_text = result.get("response", "").strip()
+        
+        if not summary_text:
+            raise OllamaInvalidResponseError("Ollama returned empty response")
+        
+        # Validate summary is reasonable length
+        if len(summary_text) < 30:
+            raise OllamaInvalidResponseError("Generated summary is too short")
+        
+        if len(summary_text) > 2000:
+            summary_text = summary_text[:2000].strip()
+        
+        return {
+            "summary": summary_text,
+            "memory_count": len(memories_data),
+            "period_type": period_type,
+            "start_date": start_date,
+            "end_date": end_date,
+            "model": OLLAMA_MODEL
+        }
+    
+    except requests.exceptions.Timeout:
+        logger.error("Ollama request timed out for period insights generation")
+        raise OllamaTimeoutError("AI service timed out. Try again.")
+    
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"Cannot connect to Ollama for period insights: {str(e)}")
+        raise OllamaUnavailableError(
+            "AI service unavailable. Check that Ollama is running."
+        )
+    
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Ollama request failed for period insights: {str(e)}")
+        raise OllamaUnavailableError(
+            "AI service error. Try again later."
+        )
+
+
 def expand_search_query(query: str) -> Dict[str, any]:
     """
     Expand and understand a natural language search query using Ollama.
