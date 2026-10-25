@@ -21,8 +21,15 @@ import {
   Play,
   Users,
   Download,
+  Pin,
   Save,
   MessageCircle,
+  X,
+  AlertCircle,
+  Images,
+  FolderOpen,
+  Camera,
+  ArrowUpRight,
 } from "lucide-react"
 import {
   AreaChart,
@@ -56,6 +63,11 @@ import {
   Stat,
   Textarea,
 } from "../../components/ui"
+// Calm editorial design system: flat surfaces, precise borders, no heavy gradients.
+const actionPrimary = "inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-sm transition duration-200 hover:bg-slate-700 hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+const actionSecondary = "inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 shadow-sm transition duration-200 hover:border-slate-400 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+const actionSubtle = "inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:opacity-50"
+const actionDanger = "inline-flex items-center justify-center gap-1 rounded-lg border border-transparent bg-white/95 p-2 text-rose-600 shadow-sm transition hover:border-rose-200 hover:bg-rose-50 disabled:opacity-50"
 const moodColors = {
   Heureux: "#22c55e",
   Calme: "#22d3ee",
@@ -74,7 +86,7 @@ function JournalPhotos({ ids = [] }) {
     let active = true
     if (!ids.length) { setAttachments([]); return }
     mediaPhotoService.getAttachments()
-      .then((items) => { if (active) setAttachments(items.filter((m) => ids.includes(m.id))) })
+      .then((items) => { if (active) setAttachments(items.filter((m) => ids.some((id) => String(id) === String(m.id)))) })
       .catch(() => { if (active) setAttachments([]) })
     return () => { active = false }
   }, [key])
@@ -82,8 +94,8 @@ function JournalPhotos({ ids = [] }) {
   return <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
     {attachments.map((file) => <div key={file.id} className="overflow-hidden rounded-2xl border border-slate-200 shadow-sm">
       {file.media_type === "video"
-        ? <video src={file.url || file.file} controls preload="metadata" className="aspect-square w-full bg-black object-contain" />
-        : <img src={file.url || file.file} alt={file.title} className="aspect-square w-full object-cover" />}
+        ? <video src={file.file_url || file.url || file.file} controls preload="metadata" className="aspect-square w-full bg-black object-contain" />
+        : <img src={file.file_url || file.url || file.file} alt={file.title} className="aspect-square w-full object-cover" />}
       {file.description && <p className="p-2 text-xs text-slate-600">{file.description}</p>}
     </div>)}
   </div>
@@ -125,7 +137,7 @@ function JournalVisionPanel({ images = [], busyId, error, result, onAnalyze }) {
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         {photos.map((photo) => (
           <div key={photo.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-            <img src={photo.url || photo.file} alt={photo.title || "Photo du journal"} className="aspect-square w-full rounded-lg object-cover" />
+            <img src={photo.file_url || photo.url || photo.file} alt={photo.title || "Photo du journal"} className="aspect-square w-full rounded-lg object-cover" />
             <p className="mt-2 truncate text-sm font-semibold text-slate-700">{photo.title || "Photo"}</p>
             <Button variant="ai" className="mt-2 w-full" disabled={Boolean(busyId)} onClick={() => onAnalyze(photo.id)}>
               <Sparkles size={15} /> {String(busyId) === String(photo.id) ? "Analyse en cours..." : "Analyser cette photo"}
@@ -203,20 +215,22 @@ function JournalDictation({ onTranscript, disabled = false }) {
     } catch (err) { setError(err.message || "Accès au microphone refusé.") }
   }
 
-  return <div className="rounded-2xl border border-violet-100 bg-violet-50/50 p-4">
+  return <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <div><p className="text-sm font-bold text-slate-900">Dictée vocale · Whisper</p>
+      <div><p className="text-sm font-bold text-slate-900">Dictée vocale</p>
         <p className="text-xs text-slate-500">Parlez librement, puis vérifiez la transcription avant d'enregistrer.</p></div>
       <button type="button" disabled={disabled || busy} onClick={recording ? stop : start}
-        className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${recording ? "bg-rose-600" : "bg-violet-600 hover:bg-violet-700"}`}>
+        className={`${actionPrimary} ${recording ? "!bg-rose-600 hover:!bg-rose-700" : ""}`}>
         <Mic size={16}/>{recording ? "Arrêter" : busy ? "Transcription..." : "Dicter mon texte"}
       </button>
     </div>
     {recording && <p role="status" className="mt-2 text-xs font-medium text-rose-700">● Enregistrement en cours…</p>}
-    {busy && <p role="status" className="mt-2 text-xs text-violet-700">Whisper transcrit votre audio localement…</p>}
+    {busy && <p role="status" className="mt-2 text-xs text-violet-700">Transcription de votre audio en cours…</p>}
     {error && <p role="alert" className="mt-2 text-xs text-red-600">{error}</p>}
   </div>
 }
+
+const countJournalWords = (text) => (text.trim().match(/\S+/g) || []).length
 
 function EntryForm({ item }) {
   const { createJournal, updateJournal, notify } = useStore()
@@ -228,7 +242,10 @@ function EntryForm({ item }) {
   const [tagText, setTagText] = useState(() => (item?.tags || []).join(", "))
   const [selectedIds, setSelectedIds] = useState(() => item?.images || [])
   const [availablePhotos, setAvailablePhotos] = useState([])
-  const [mediaLoading, setMediaLoading] = useState(true)
+  const [mediaLoading, setMediaLoading] = useState(false)
+  const [showLibrary, setShowLibrary] = useState(false)
+  const [fieldErrors, setFieldErrors] = useState({})
+  const [filePreviews, setFilePreviews] = useState([])
   const [newFiles, setNewFiles] = useState([])
   const [ai, setAi] = useState(null)
   const [aiBusy, setAiBusy] = useState(false)
@@ -237,28 +254,53 @@ function EntryForm({ item }) {
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
+    if (!showLibrary) return
     let active = true
+    setMediaLoading(true)
     mediaPhotoService.getAttachments().then((photos) => {
-      if (active) setAvailablePhotos(photos)
+      if (active) setAvailablePhotos(Array.isArray(photos) ? photos : photos.results || [])
     }).catch((err) => {
-      if (active) setError(err.message || "Impossible de charger les médias.")
-    }).finally(() => {
-      if (active) setMediaLoading(false)
-    })
+      if (active) setError(err.message || "Impossible de charger la bibliothèque.")
+    }).finally(() => { if (active) setMediaLoading(false) })
     return () => { active = false }
-  }, [])
+  }, [showLibrary])
+
+  useEffect(() => {
+    const previews = newFiles.map((file) => ({ file, url: URL.createObjectURL(file) }))
+    setFilePreviews(previews)
+    return () => previews.forEach(({ url }) => URL.revokeObjectURL(url))
+  }, [newFiles])
+
+  const validate = (draft) => {
+    const errors = {}
+    const title = form.title.trim()
+    const tags = tagText.split(",").map((x) => x.trim()).filter(Boolean)
+    if (title.length < 3 || title.length > 255) errors.title = "Le titre doit contenir entre 3 et 255 caractères."
+    if (!draft && countJournalWords(form.content) < 5) errors.content = "Votre histoire doit contenir au moins 5 mots pour être publiée (brouillon autorisé)."
+    if (!form.date || !/^\d{4}-\d{2}-\d{2}$/.test(form.date) || Number.isNaN(Date.parse(form.date))) errors.date = "Choisissez une date valide."
+    else if (form.date > new Date().toLocaleDateString("en-CA")) errors.date = "La date ne peut pas être dans le futur."
+    if (!form.mood || form.mood.length > 50) errors.mood = "Choisissez une humeur valide."
+    if (tags.length > 10) errors.tags = "Maximum 10 tags."
+    else if (tags.some((tag) => tag.length > 30)) errors.tags = "Chaque tag doit contenir au maximum 30 caractères."
+    else if (new Set(tags.map((tag) => tag.toLowerCase())).size !== tags.length) errors.tags = "Évitez les tags en double."
+    setFieldErrors(errors)
+    return Object.keys(errors).length === 0
+  }
+
+  const clearFieldError = (name) => setFieldErrors((prev) => ({ ...prev, [name]: undefined }))
+  const FieldError = ({ name }) => fieldErrors[name] ? <p role="alert" className="mt-1.5 flex items-center gap-1.5 text-xs font-medium text-rose-600"><AlertCircle size={13}/>{fieldErrors[name]}</p> : null
 
   const save = async (draft = false) => {
-    if (form.title.trim().length < 3 || (!draft && !form.content.trim())) {
-      setError("Titre : minimum 3 caractères. Contenu requis sauf pour un brouillon.")
+    if (!validate(draft)) {
+      setError("Corrigez les champs indiqués avant d’enregistrer.")
       return
     }
     setSaving(true)
     setError("")
     try {
       // Ensure every selected attachment is still available to this account.
-      const beforeUpload = await mediaPhotoService.getAttachments()
-      const permittedIds = new Set(beforeUpload.map((m) => String(m.id)))
+      const beforeUpload = selectedIds.length ? await mediaPhotoService.getAttachments() : []
+      const permittedIds = new Set((Array.isArray(beforeUpload) ? beforeUpload : beforeUpload.results || []).map((m) => String(m.id)))
       const missing = selectedIds.filter((id) => !permittedIds.has(String(id)))
       if (missing.length) {
         throw new Error("Certains médias sélectionnés ne sont plus accessibles. Retirez-les puis réessayez : " + missing.join(", "))
@@ -271,8 +313,8 @@ function EntryForm({ item }) {
       // Confirm each uploaded UUID is visible through the authenticated media API.
       if (uploaded.length) {
         const visible = await mediaPhotoService.getAttachments()
-        const visibleIds = new Set(visible.map((m) => m.id))
-        if (uploaded.some((id) => !visibleIds.has(id))) {
+        const visibleIds = new Set((Array.isArray(visible) ? visible : visible.results || []).map((m) => String(m.id)))
+        if (uploaded.some((id) => !visibleIds.has(String(id)))) {
           throw new Error("Média envoyé mais introuvable dans votre bibliothèque. Vérifiez que les deux API utilisent la même base et le même utilisateur.")
         }
       }
@@ -301,77 +343,96 @@ function EntryForm({ item }) {
     </div>
     <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_350px]">
       <Card className="space-y-6 rounded-3xl border border-slate-200 bg-white p-7 shadow-sm">
-        <Input label="Titre" placeholder="Donnez un titre à cette journée" value={form.title}
-          onChange={(e) => setForm({ ...form, title: e.target.value })} />
-        <Textarea label="Votre histoire" rows={12} placeholder="Qu’avez-vous envie de retenir ?"
-          value={form.content} onChange={(e) => setForm({ ...form, content: e.target.value })} />
+        <div className="space-y-2">
+          <div className="flex items-center justify-between"><label className="text-sm font-semibold text-slate-800">Titre <span className="text-rose-500">*</span></label><span className="text-xs text-slate-400">{form.title.length}/255</span></div>
+          <input type="text" maxLength={255} placeholder="Donnez un titre à cette journée" value={form.title}
+            aria-invalid={Boolean(fieldErrors.title)} onChange={(e) => { setForm({ ...form, title: e.target.value }); clearFieldError("title") }}
+            className={`w-full rounded-2xl border bg-white px-4 py-3 text-sm outline-none transition focus:ring-4 focus:ring-violet-100 ${fieldErrors.title ? "border-rose-400" : "border-slate-200 focus:border-violet-400"}`} />
+          <FieldError name="title" />
+        </div>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between"><label className="text-sm font-semibold text-slate-800">Votre histoire <span className="text-rose-500">*</span></label><span className="text-xs text-slate-400">{countJournalWords(form.content)} / 5 mots minimum</span></div>
+          <textarea rows={11} placeholder="Qu’avez-vous envie de retenir ?" value={form.content}
+            aria-invalid={Boolean(fieldErrors.content)} onChange={(e) => { setForm({ ...form, content: e.target.value }); clearFieldError("content") }}
+            className={`w-full resize-y rounded-2xl border bg-white px-4 py-4 text-sm leading-7 outline-none transition focus:ring-4 focus:ring-violet-100 ${fieldErrors.content ? "border-rose-400" : "border-slate-200 focus:border-violet-400"}`} />
+          <FieldError name="content" />
+          <p className="text-xs text-slate-400">Minimum 5 mots pour publier. Vous pouvez enregistrer un brouillon à tout moment.</p>
+        </div>
         <JournalDictation disabled={saving} onTranscript={(text) => setForm((prev) => ({ ...prev, content: [prev.content.trim(), text.trim()].filter(Boolean).join("\n\n") }))} />
         <div className="grid gap-4 sm:grid-cols-3">
-          <Input label="Date" type="date" value={form.date}
-            onChange={(e) => setForm({ ...form, date: e.target.value })} />
-          <Select label="Humeur" value={form.mood}
-            onChange={(e) => setForm({ ...form, mood: e.target.value })}>
+          <div><Input label="Date" type="date" max={new Date().toLocaleDateString("en-CA")} value={form.date}
+            onChange={(e) => { setForm({ ...form, date: e.target.value }); clearFieldError("date") }} /><FieldError name="date" /></div>
+          <div><Select label="Humeur" value={form.mood}
+            onChange={(e) => { setForm({ ...form, mood: e.target.value }); clearFieldError("mood") }}>
             {Object.keys(moodColors).map((x) => <option key={x}>{x}</option>)}
-          </Select>
-          <Input label="Tags (séparés par des virgules)" value={tagText}
-            onChange={(e) => setTagText(e.target.value)} />
+          </Select><FieldError name="mood" /></div>
+          <div><Input label="Tags (séparés par des virgules)" value={tagText}
+            onChange={(e) => { setTagText(e.target.value); clearFieldError("tags") }} /><FieldError name="tags" /></div>
         </div>
-        <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/60 p-5">
-          <label className="mb-3 block text-sm font-bold">Photos et vidéos de cette entrée</label>
-          <input type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm"
-            multiple disabled={saving} className="block w-full text-sm"
-            onChange={(e) => {
-              const files = Array.from(e.target.files || [])
-              const validTypes = ["image/jpeg", "image/png", "image/webp", "image/gif", "video/mp4", "video/webm"]
-              if (files.some((f) => !validTypes.includes(f.type) || f.size > (f.type.startsWith("video/") ? 100 : 10) * 1024 * 1024)) {
-                setError("Formats : JPG, PNG, WEBP, GIF, MP4, WEBM. Maximum 10 Mo/image ou 100 Mo/vidéo.")
-                e.target.value = ""
-                return
-              }
-              setError("")
-              setNewFiles((prev) => [...prev, ...files]); e.target.value = ""
-            }} />
-          {newFiles.length > 0 && <div className="mt-3 space-y-2">
-            {newFiles.map((file, index) => <div key={`${file.name}-${index}`}
-              className="flex items-center justify-between gap-2 text-sm">
-              <span className="truncate">{file.name} {file.type.startsWith("video/") ? "🎬" : "📷"}</span>
-              <button type="button" className="text-red-600" disabled={saving}
-                onClick={() => setNewFiles((prev) => prev.filter((_, i) => i !== index))}>Retirer</button>
-            </div>)}
-          </div>}
-          {mediaLoading && <p className="mt-3 text-xs text-slate-500">Chargement des médias...</p>}
-          {selectedIds.length > 0 && <div className="mt-3 flex items-center justify-between rounded-lg bg-violet-50 p-2 text-sm">
-            <span>{selectedIds.length} média(s) sélectionné(s)</span>
-            <button type="button" disabled={saving} className="font-semibold text-red-600" onClick={() => setSelectedIds([])}>Tout retirer</button>
-          </div>}
-          {availablePhotos.length > 0 && <>
-            <p className="mt-4 mb-2 text-sm font-semibold">Choisir aussi dans ma bibliothèque (cliquer pour ajouter ou retirer)</p>
-            <div className="grid grid-cols-3 gap-2">
-              {availablePhotos.map((photo) => {
-                const selected = selectedIds.includes(photo.id)
-                return <div key={photo.id} className={`relative overflow-hidden rounded-lg border-2 ${selected ? "border-violet-600" : "border-slate-200"}`}>
-                  <button type="button" disabled={saving} aria-label={selected ? `Retirer ${photo.title}` : `Sélectionner ${photo.title}`}
-                    onClick={() => setSelectedIds((prev) => selected ? prev.filter((id) => id !== photo.id) : [...prev, photo.id])}
-                    className="block w-full text-left">
-                    {photo.media_type === "video"
-                      ? <video src={photo.url || photo.file} muted preload="metadata" className="aspect-square w-full bg-black object-cover pointer-events-none" />
-                      : <img src={photo.url || photo.file} alt={photo.title} className="aspect-square w-full object-cover" />}
-                    <span className={`block p-2 text-center text-xs font-bold ${selected ? "text-red-600" : "text-violet-600"}`}>{selected ? "Retirer" : "Ajouter"}</span>
-                  </button>
-                </div>
-              })}
+        <section className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5 sm:p-6">
+          <div className="mb-4 flex items-start gap-3">
+            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white text-slate-700 shadow-sm ring-1 ring-slate-200"><Images size={21}/></span>
+            <div><h3 className="font-bold text-slate-900">Souvenirs de cette entrée</h3><p className="mt-1 text-xs leading-5 text-slate-500">Ajoutez des photos ou vidéos uniquement à cette entrée. Votre bibliothèque n’apparaît plus automatiquement.</p></div>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <label className={`${actionPrimary} cursor-pointer`}>
+              <Camera size={18}/> Importer des photos <ArrowUpRight size={15} className="opacity-60"/>
+              <input type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm" multiple disabled={saving} className="sr-only"
+                onChange={(e) => {
+                  const files = Array.from(e.target.files || [])
+                  const validTypes = ["image/jpeg", "image/png", "image/webp", "image/gif", "video/mp4", "video/webm"]
+                  if (files.some((f) => !validTypes.includes(f.type) || f.size > (f.type.startsWith("video/") ? 100 : 10) * 1024 * 1024)) {
+                    setError("Formats : JPG, PNG, WEBP, GIF, MP4, WEBM. Maximum 10 Mo/image ou 100 Mo/vidéo.")
+                    e.target.value = ""; return
+                  }
+                  setError(""); setNewFiles((prev) => [...prev, ...files]); e.target.value = ""
+                }} />
+            </label>
+            <button type="button" disabled={saving} onClick={() => setShowLibrary(true)}
+              className={actionSecondary}>
+              <FolderOpen size={18}/> Choisir dans la bibliothèque
+            </button>
+          </div>
+          {(filePreviews.length > 0 || selectedIds.length > 0) && <div className="mt-5">
+            <div className="mb-3 flex items-center justify-between"><p className="text-sm font-semibold text-slate-800">Fichiers attachés ({filePreviews.length + selectedIds.length})</p>
+              <button type="button" disabled={saving} className="rounded-lg px-3 py-2 text-xs font-semibold text-rose-600 transition hover:bg-rose-50" onClick={() => { setNewFiles([]); setSelectedIds([]) }}>Tout retirer</button></div>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+              {filePreviews.map(({ file, url }, index) => <div key={`${file.name}-${index}`} className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                {file.type.startsWith("video/") ? <video src={url} className="aspect-square w-full bg-slate-900 object-cover" muted /> : <img src={url} alt={file.name} className="aspect-square w-full object-cover" />}
+                <button type="button" aria-label={`Retirer ${file.name}`} disabled={saving} onClick={() => setNewFiles((prev) => prev.filter((_, i) => i !== index))} className={`absolute right-2 top-2 ${actionDanger}`}><X size={15}/></button>
+                <p className="truncate px-2 py-2 text-xs text-slate-600" title={file.name}>{file.name}</p>
+              </div>)}
+              {selectedIds.map((id) => { const photo = availablePhotos.find((p) => String(p.id) === String(id)); return <div key={id} className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                {photo ? (photo.media_type === "video" ? <video src={photo.file_url || photo.url || photo.file} muted className="aspect-square w-full bg-slate-900 object-cover" /> : <img src={photo.file_url || photo.url || photo.file} alt={photo.title || "Souvenir"} className="aspect-square w-full object-cover" />) : <div className="grid aspect-square place-items-center bg-violet-50 text-violet-400"><ImageIcon size={28}/></div>}
+                <button type="button" aria-label="Retirer le média" disabled={saving} onClick={() => setSelectedIds((prev) => prev.filter((x) => String(x) !== String(id)))} className={`absolute right-2 top-2 ${actionDanger}`}><X size={15}/></button>
+                <p className="truncate px-2 py-2 text-xs text-slate-600">{photo?.title || "Photo existante"}</p>
+              </div> })}
             </div>
-          </>}
-        </div>
+          </div>}
+          {showLibrary && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-label="Bibliothèque de médias">
+            <div className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+              <div className="flex items-center justify-between border-b border-slate-100 p-5"><div><h3 className="text-lg font-bold text-slate-900">Ma bibliothèque</h3><p className="text-xs text-slate-500">Choisissez uniquement les souvenirs à associer à cette entrée.</p></div>
+                <button type="button" aria-label="Fermer" onClick={() => setShowLibrary(false)} className="rounded-lg border border-slate-200 p-2 text-slate-500 transition hover:bg-slate-50"><X size={21}/></button></div>
+              <div className="overflow-y-auto p-5">{mediaLoading ? <p className="py-12 text-center text-slate-500">Chargement de votre bibliothèque…</p> : availablePhotos.length === 0 ? <p className="py-12 text-center text-slate-500">Aucun média dans votre bibliothèque.</p> :
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">{availablePhotos.map((photo) => { const selected = selectedIds.some((id) => String(id) === String(photo.id)); return <button key={photo.id} type="button" onClick={() => setSelectedIds((prev) => selected ? prev.filter((id) => String(id) !== String(photo.id)) : [...prev, photo.id])}
+                  className={`group relative overflow-hidden rounded-xl border-2 bg-white text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${selected ? "border-slate-900 ring-2 ring-slate-200" : "border-slate-200 hover:border-slate-400"}`}>
+                  {photo.media_type === "video" ? <video src={photo.file_url || photo.url || photo.file} muted className="aspect-square w-full bg-slate-900 object-cover" /> : <img src={photo.file_url || photo.url || photo.file} alt={photo.title || "Photo"} className="aspect-square w-full object-cover" />}
+                  {selected && <span className="absolute right-2 top-2 rounded-lg bg-slate-900 p-1.5 text-white shadow"><CheckCircle2 size={17}/></span>}
+                  <p className="truncate p-2 text-xs font-medium text-slate-700">{photo.title || "Souvenir"}</p>
+                </button> })}</div>}</div>
+              <div className="flex items-center justify-between border-t border-slate-100 p-4"><p className="text-xs text-slate-500">{selectedIds.length} sélectionné(s)</p><button type="button" onClick={() => setShowLibrary(false)} className={actionPrimary}>Terminer</button></div>
+            </div>
+          </div>}
+        </section>
         {error && <p className="text-sm text-red-600" role="alert">{error}</p>}
-        <div className="flex flex-wrap gap-2">
-          <Button disabled={saving} onClick={() => save(false)}>{saving ? "Enregistrement..." : "Enregistrer l’entrée"}</Button>
-          <Button disabled={saving} variant="secondary" onClick={() => save(true)}>Enregistrer le brouillon</Button>
-          <Button disabled={saving} variant="ghost" onClick={() => nav("/journal")}>Annuler</Button>
+        <div className="flex flex-wrap items-center gap-3 border-t border-slate-200 pt-6">
+          <button type="button" disabled={saving} onClick={() => save(false)} className={actionPrimary}><CheckCircle2 size={17}/>{saving ? "Enregistrement..." : "Publier l’entrée"} <ArrowUpRight size={15} className="opacity-60"/></button>
+          <button type="button" disabled={saving} onClick={() => save(true)} className={actionSecondary}><Save size={17}/> Garder en brouillon</button>
+          <button type="button" disabled={saving} onClick={() => nav("/journal")} className={actionSubtle}>Annuler</button>
         </div>
       </Card>
       <div className="space-y-5">
-        <Card className="rounded-3xl border border-violet-100 bg-gradient-to-b from-violet-50/70 to-white p-6 shadow-sm">
+        <Card className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <SectionTitle title="Assistant d’écriture IA" subtitle="Améliorez votre texte sans modifier votre brouillon automatiquement." />
           <Button variant="ai" className="w-full" disabled={aiBusy || !form.content.trim()}
             onClick={async () => {
@@ -394,10 +455,7 @@ function EntryForm({ item }) {
             </div>
           </div>}
         </Card>
-        <Card className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"><SectionTitle title="Photos et vidéos sélectionnées" />
-          <JournalPhotos ids={selectedIds} />
-          <p className="mt-2 text-xs text-slate-500">Les nouveaux fichiers seront envoyés lors de l’enregistrement.</p>
-        </Card>
+
       </div>
     </div>
   </>
@@ -482,6 +540,7 @@ export function JournalPage({ mode = "list" }) {
   const [listLoading, setListLoading] = useState(false)
   const [listError, setListError] = useState("")
   const [revision, setRevision] = useState(0)
+  const [exportBusy, setExportBusy] = useState(false)
   const [detail, setDetail] = useState(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [confirm, setConfirm] = useState(false)
@@ -501,6 +560,7 @@ export function JournalPage({ mode = "list" }) {
     const filters = { page, page_size: pageSize, search: debouncedQ, ordering: sort,
       mood, date_from: dateFrom, date_to: dateTo }
     if (status === "favorite") filters.favorite = true
+    if (status === "pinned") filters.pinned = true
     if (status === "draft") filters.draft = true
     if (status === "published") filters.draft = false
     journalService.getEntries(filters)
@@ -572,6 +632,32 @@ export function JournalPage({ mode = "list" }) {
     }
   }
 
+  const togglePinned = async (entry) => {
+    try {
+      const updated = await journalService.togglePin(entry.id)
+      const pinned = Boolean(updated.pinned)
+      setResults((prev) => prev.map((x) => String(x.id) === String(entry.id) ? { ...x, pinned } : x))
+      setDetail((prev) => prev && String(prev.id) === String(entry.id) ? { ...prev, pinned } : prev)
+      setRevision((n) => n + 1)
+      notify(pinned ? "Entrée épinglée" : "Entrée désépinglée")
+    } catch (err) {
+      notify(err.message || "Impossible de modifier l'épinglage", "error")
+    }
+  }
+
+  const exportJournalPdf = async (entry) => {
+    if (exportBusy) return
+    setExportBusy(true)
+    try {
+      await journalService.exportEntryPdf(entry.id)
+      notify("PDF téléchargé")
+    } catch (err) {
+      notify(err.message || "Export PDF impossible", "error")
+    } finally {
+      setExportBusy(false)
+    }
+  }
+
   const removeEntry = async () => {
     if (!item || busy) return
     setBusy(true)
@@ -630,7 +716,12 @@ export function JournalPage({ mode = "list" }) {
                 </section>}
                 <footer className="mt-9 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-6">
                   <span className="text-xs text-slate-400">Un espace pour garder ce qui compte.</span>
-                  <div className="flex flex-wrap gap-2"><Link to={`/journal/${item.id}/edit`}><Button variant="secondary"><Edit3 size={15}/> Modifier</Button></Link><Button variant="danger" onClick={() => setConfirm(true)}><Trash2 size={15}/> Supprimer</Button></div>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" onClick={() => togglePinned(item)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-violet-300 hover:bg-violet-50"><Pin size={16} className={item.pinned ? "fill-violet-600 text-violet-600" : ""}/>{item.pinned ? "Désépingler" : "Épingler"}</button>
+                    <button type="button" disabled={exportBusy} onClick={() => exportJournalPdf(item)} className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-violet-700 disabled:opacity-50"><Download size={16}/>{exportBusy ? "Export en cours..." : "Télécharger le PDF"}</button>
+                    <Link to={`/journal/${item.id}/edit`}><Button variant="secondary"><Edit3 size={15}/> Modifier</Button></Link>
+                    <Button variant="danger" onClick={() => setConfirm(true)}><Trash2 size={15}/> Supprimer</Button>
+                  </div>
                 </footer>
                 {error && <p className="mt-3 text-sm text-red-600" role="alert">{error}</p>}
               </div>
@@ -802,6 +893,7 @@ export function JournalPage({ mode = "list" }) {
           <Select value={status} onChange={(e) => { setStatus(e.target.value); resetPage() }}>
             <option value="all">Toutes les entrées</option>
             <option value="favorite">Favoris</option>
+            <option value="pinned">Épinglées</option>
             <option value="draft">Brouillons</option>
             <option value="published">Publiées</option>
           </Select>
@@ -824,10 +916,12 @@ export function JournalPage({ mode = "list" }) {
               <div className="flex gap-2">
                 <Badge className="bg-violet-50 text-violet-700"><span className="mr-1.5 inline-block h-2 w-2 rounded-full" style={{ backgroundColor: moodColors[x.mood] || "#8b5cf6" }} />{x.mood}</Badge>
                 {x.draft && <Badge>Brouillon</Badge>}
+                {x.pinned && <Badge>Épinglée</Badge>}
               </div>
-              <button aria-label={x.favorite ? "Retirer des favoris" : "Ajouter aux favoris"} onClick={() => toggleFavorite(x)}>
-                <Heart size={18} className={x.favorite ? "fill-rose-500 text-rose-500" : "text-slate-300"} />
-              </button>
+              <div className="flex items-center gap-3">
+                <button type="button" aria-label={x.pinned ? "Désépingler" : "Épingler"} onClick={() => togglePinned(x)}><Pin size={18} className={x.pinned ? "fill-violet-600 text-violet-600" : "text-slate-300"}/></button>
+                <button type="button" aria-label={x.favorite ? "Retirer des favoris" : "Ajouter aux favoris"} onClick={() => toggleFavorite(x)}><Heart size={18} className={x.favorite ? "fill-rose-500 text-rose-500" : "text-slate-300"}/></button>
+              </div>
             </div>
             <Link to={`/journal/${x.id}`}>
               <h2 className="mt-5 text-xl font-bold tracking-tight text-slate-900 transition group-hover:text-violet-600">{x.title}</h2>

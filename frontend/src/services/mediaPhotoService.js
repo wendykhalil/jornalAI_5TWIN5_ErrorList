@@ -4,7 +4,7 @@ import authService from "./authService"
 const API_BASE_URL = (
   import.meta.env.VITE_API_BASE_URL ||
   "http://localhost:8000/api"
-).replace(/\/$/, "")
+).replace(/\/+$/, "")
 
 const MEDIA_URL = `${API_BASE_URL}/media/`
 
@@ -38,7 +38,9 @@ function getErrorMessage(data, fallback) {
       ([field, value]) => {
         const message = Array.isArray(value)
           ? value.join(", ")
-          : String(value)
+          : typeof value === "object" && value !== null
+            ? JSON.stringify(value)
+            : String(value)
 
         return `${field}: ${message}`
       }
@@ -104,6 +106,15 @@ async function mediaRequest(
     return null
   }
 
+  const contentType =
+    response.headers.get("content-type") || ""
+
+  if (!contentType.includes("application/json")) {
+    throw new Error(
+      "Réponse inattendue du serveur."
+    )
+  }
+
   return response.json()
 }
 
@@ -112,9 +123,15 @@ async function mediaRequest(
 // ==========================================
 
 function validateFile(file) {
-  if (!file) {
+  if (!file || !(file instanceof File)) {
     throw new Error(
-      "Veuillez sélectionner un fichier."
+      "Veuillez sélectionner un fichier valide."
+    )
+  }
+
+  if (file.size === 0) {
+    throw new Error(
+      "Le fichier sélectionné est vide."
     )
   }
 
@@ -150,7 +167,9 @@ function normalizeResults(response) {
     return response
   }
 
-  return response?.results || []
+  return Array.isArray(response?.results)
+    ? response.results
+    : []
 }
 
 // ==========================================
@@ -160,11 +179,22 @@ function normalizeResults(response) {
 export const mediaPhotoService = {
 
   // ========================================
+  // JOURNAL ATTACHMENT UPLOAD
+  // ========================================
+
+  async uploadAttachment(file, description = "") {
+    return mediaPhotoService.uploadMedia(
+      file,
+      description
+    )
+  },
+
+  // ========================================
   // GET ALL JOURNAL ATTACHMENTS
   // ========================================
 
   async getAttachments() {
-    return this.getMedia()
+    return mediaPhotoService.getMedia()
   },
 
   // ========================================
@@ -200,9 +230,12 @@ export const mediaPhotoService = {
 
       if (
         nextUrl.origin !== baseUrl.origin ||
-        nextUrl.pathname !== baseUrl.pathname
+        nextUrl.pathname.replace(/\/+$/, "") !==
+          baseUrl.pathname.replace(/\/+$/, "")
       ) {
-        break
+        throw new Error(
+          "Pagination média invalide."
+        )
       }
 
       endpoint = nextUrl.search
@@ -220,7 +253,7 @@ export const mediaPhotoService = {
   // ========================================
 
   async getImages() {
-    const media = await this.getMedia()
+    const media = await mediaPhotoService.getMedia()
 
     return media.filter(
       (item) => item.media_type === "image"
@@ -232,7 +265,7 @@ export const mediaPhotoService = {
   // ========================================
 
   async getVideos() {
-    const media = await this.getMedia()
+    const media = await mediaPhotoService.getMedia()
 
     return media.filter(
       (item) => item.media_type === "video"
@@ -252,7 +285,7 @@ export const mediaPhotoService = {
 
     formData.append(
       "title",
-      file.name.replace(/\.[^.]+$/, "")
+      file.name.replace(/\.[^.]+$/, "").slice(0, 255)
     )
 
     formData.append("media_type", mediaType)
@@ -290,7 +323,10 @@ export const mediaPhotoService = {
       )
     }
 
-    return this.uploadMedia(file, description)
+    return mediaPhotoService.uploadMedia(
+      file,
+      description
+    )
   },
 
   // ========================================
@@ -304,7 +340,10 @@ export const mediaPhotoService = {
       )
     }
 
-    return this.uploadMedia(file, description)
+    return mediaPhotoService.uploadMedia(
+      file,
+      description
+    )
   },
 
   // ========================================
@@ -323,7 +362,8 @@ export const mediaPhotoService = {
 
   async verifyAttachment(id) {
     try {
-      const media = await this.getMediaById(id)
+      const media =
+        await mediaPhotoService.getMediaById(id)
 
       return Boolean(
         media &&
@@ -335,7 +375,7 @@ export const mediaPhotoService = {
     } catch (error) {
       if (
         error.message.includes("404") ||
-        error.message.includes("Not found")
+        error.message.toLowerCase().includes("not found")
       ) {
         return false
       }
@@ -352,7 +392,8 @@ export const mediaPhotoService = {
     const results = await Promise.all(
       ids.map(async (id) => ({
         id,
-        exists: await this.verifyAttachment(id),
+        exists:
+          await mediaPhotoService.verifyAttachment(id),
       }))
     )
 
@@ -382,4 +423,3 @@ export const mediaPhotoService = {
 }
 
 export default mediaPhotoService
-

@@ -10,6 +10,19 @@ import uuid
 import tempfile
 import threading
 from pathlib import Path
+from io import BytesIO
+from xml.sax.saxutils import escape
+
+from django.http import FileResponse
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlab.lib.utils import ImageReader
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as PDFImage, KeepTogether, HRFlowable, Table, TableStyle
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from PIL import Image as PILImage, ImageOps
 
 from langdetect import detect, DetectorFactory, LangDetectException
 
@@ -283,6 +296,7 @@ class JournalEntryViewSet(viewsets.ModelViewSet):
             })
 
         return queryset.order_by(
+            "-pinned",
             ordering,
             "-created_at",
             "-pk"
@@ -294,6 +308,180 @@ class JournalEntryViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+    # ==========================================
+    # PIN / UNPIN (SERVER-SIDE TOGGLE)
+    # ==========================================
+    @action(detail=True, methods=["post"], url_path="toggle-pin")
+    def toggle_pin(self, request, pk=None):
+        entry = self.get_object()
+        entry.pinned = not entry.pinned
+        entry.save(update_fields=["pinned", "updated_at"])
+        return Response(self.get_serializer(entry).data)
+
+    # ==========================================
+    # EXPORT PDF WITH ATTACHED PHOTOS
+    # ==========================================
+    @action(detail=True, methods=["get"], url_path="export-pdf")
+    def export_pdf(self, request, pk=None):
+        entry = self.get_object()
+        buffer = BytesIO()
+        document = SimpleDocTemplate(
+            buffer, pagesize=A4, rightMargin=55, leftMargin=55,
+            topMargin=78, bottomMargin=65,
+            title=entry.title or "Journal", author="MindLog",
+        )
+        font_name = "Helvetica"
+        font_bold = "Helvetica-Bold"
+        font_candidates = [
+            ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+            ("C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/arialbd.ttf"),
+        ]
+        for normal, bold in font_candidates:
+            if os.path.isfile(normal) and os.path.isfile(bold):
+                try:
+                    if "JournalUnicode" not in pdfmetrics.getRegisteredFontNames():
+                        pdfmetrics.registerFont(TTFont("JournalUnicode", normal))
+                    if "JournalUnicodeBold" not in pdfmetrics.getRegisteredFontNames():
+                        pdfmetrics.registerFont(TTFont("JournalUnicodeBold", bold))
+                    font_name, font_bold = "JournalUnicode", "JournalUnicodeBold"
+                    pdfmetrics.registerFontFamily(font_name, normal=font_name, bold=font_bold)
+                    break
+                except Exception:
+                    continue
+
+        # Editorial-style journal export: restrained ink, accent line and generous spacing.
+        ink = colors.HexColor("#172033")
+        muted = colors.HexColor("#697386")
+        accent = colors.HexColor("#7761A9")
+        line = colors.HexColor("#E4E7ED")
+        styles = getSampleStyleSheet()
+        eyebrow_style = ParagraphStyle(
+            "MindLogEyebrow", parent=styles["Normal"], fontName=font_bold,
+            fontSize=8, leading=13, textColor=accent, spaceAfter=12,
+        )
+        title_style = ParagraphStyle(
+            "MindLogTitle", parent=styles["Title"], fontName=font_bold,
+            fontSize=25, leading=32, alignment=TA_LEFT,
+            textColor=ink, spaceAfter=18,
+        )
+        meta_style = ParagraphStyle(
+            "MindLogMeta", parent=styles["Normal"], fontName=font_name,
+            fontSize=9, leading=15, textColor=muted,
+        )
+        section_style = ParagraphStyle(
+            "MindLogSection", parent=styles["Heading2"], fontName=font_bold,
+            fontSize=13, leading=19, textColor=ink,
+            spaceBefore=18, spaceAfter=12,
+        )
+        body_style = ParagraphStyle(
+            "MindLogBody", parent=styles["BodyText"], fontName=font_name,
+            fontSize=10.5, leading=19, textColor=ink, spaceAfter=13,
+            wordWrap="CJK",
+        )
+        image_label_style = ParagraphStyle(
+            "MindLogPhotoLabel", parent=meta_style, fontSize=9,
+            leading=14, spaceBefore=8, spaceAfter=9,
+        )
+        story = [
+            Paragraph("MINDLOG  /  JOURNAL PERSONNEL", eyebrow_style),
+            Paragraph(escape(entry.title or "Mon journal"), title_style),
+        ]
+        metadata = []
+        if entry.date:
+            metadata.append(("DATE", entry.date.strftime("%d/%m/%Y")))
+        if entry.mood:
+            metadata.append(("HUMEUR", str(entry.mood)))
+        if entry.tags:
+            tags = entry.tags if isinstance(entry.tags, list) else [entry.tags]
+            metadata.append(("MOTS-CLÉS", ", ".join(map(str, tags))))
+        if metadata:
+            cells = [Paragraph("<b>" + escape(label) + "</b><br/>" + escape(value), meta_style)
+                     for label, value in metadata]
+            width = A4[0] - 110
+            meta_table = Table([cells], colWidths=[width / len(cells)] * len(cells), hAlign="LEFT")
+            meta_table.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F5F5F8")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 12),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+                ("TOPPADDING", (0, 0), (-1, -1), 11),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 11),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ]))
+            story.extend([meta_table, Spacer(1, 24)])
+        story.append(Paragraph("Mon récit", section_style))
+        content = (entry.content or "").strip()
+        for paragraph in re.split(r"\n\s*\n", content):
+            if paragraph.strip():
+                story.append(Paragraph(escape(paragraph).replace("\n", "<br/>"), body_style))
+        if not content:
+            story.append(Paragraph("(Aucun texte)", body_style))
+
+        # Use the images attached to THIS entry, not a separate recent-media list.
+        # The entry itself is already ownership-scoped by self.get_object().
+        photos = list(entry.images.filter(media_type="image"))
+        if photos:
+            story.extend([Spacer(1, 14), HRFlowable(width="100%", thickness=0.8, color=line), Spacer(1, 8), Paragraph("Galerie de souvenirs", section_style)])
+
+        for photo in photos:
+            caption = Paragraph(escape(photo.title or "Photo"), image_label_style)
+            if not photo.file:
+                story.append(Paragraph("Photo indisponible : fichier manquant.", meta_style))
+                continue
+            try:
+                # Read through Django storage (local filesystem or cloud storage).
+                with photo.file.open("rb") as source:
+                    with PILImage.open(source) as opened:
+                        image = ImageOps.exif_transpose(opened)
+                        image.thumbnail((1800, 1800))
+                        if image.mode in ("RGBA", "LA", "P"):
+                            image = image.convert("RGBA")
+                            background = PILImage.new("RGB", image.size, "white")
+                            background.paste(image, mask=image.getchannel("A"))
+                            image = background
+                        else:
+                            image = image.convert("RGB")
+                        image_stream = BytesIO()
+                        image.save(image_stream, format="JPEG", quality=86)
+                        image_stream.seek(0)
+                        width, height = image.size
+                available_width = A4[0] - 110
+                available_height = A4[1] - 190
+                scale = min(available_width / width, available_height / height, 1)
+                pdf_image = PDFImage(image_stream, width=width * scale,
+                                     height=height * scale)
+                pdf_image.hAlign = "CENTER"
+                # One photo per block; ReportLab automatically continues on next pages.
+                story.append(KeepTogether([caption, pdf_image, Spacer(1, 22)]))
+            except Exception:
+                # Never silently pretend an image was exported.
+                story.append(Paragraph("Cette photo n'a pas pu être intégrée au PDF.", meta_style))
+
+        def draw_page(canvas, doc):
+            canvas.saveState()
+            page_width, page_height = A4
+            canvas.setStrokeColor(line)
+            canvas.setLineWidth(0.65)
+            canvas.line(55, page_height - 51, page_width - 55, page_height - 51)
+            canvas.setFont(font_bold, 8)
+            canvas.setFillColor(accent)
+            canvas.drawString(55, page_height - 41, "MINDLOG")
+            canvas.setStrokeColor(line)
+            canvas.line(55, 48, page_width - 55, 48)
+            canvas.setFont(font_name, 8)
+            canvas.setFillColor(muted)
+            canvas.drawString(55, 34, "Journal personnel  •  Export privé")
+            canvas.drawRightString(page_width - 55, 34, f"Page {doc.page}")
+            canvas.restoreState()
+
+        document.build(story, onFirstPage=draw_page, onLaterPages=draw_page)
+        buffer.seek(0)
+        return FileResponse(
+            buffer, as_attachment=True,
+            filename=f"journal_{entry.pk}.pdf",
+            content_type="application/pdf",
+        )
 
     # ==========================================
     # LOCAL WHISPER SPEECH-TO-TEXT (NO AUTO-SAVE)
