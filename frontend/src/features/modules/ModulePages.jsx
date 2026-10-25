@@ -30,6 +30,11 @@ import {
   FolderOpen,
   Camera,
   ArrowUpRight,
+  BookOpen,
+  ChevronRight,
+  SlidersHorizontal,
+  ChevronDown,
+  Clock3,
 } from "lucide-react"
 import {
   AreaChart,
@@ -103,6 +108,7 @@ function JournalPhotos({ ids = [] }) {
 
 function JournalVisionPanel({ images = [], busyId, error, result, onAnalyze }) {
   const [photos, setPhotos] = useState([])
+  const [selectedPhotoId, setSelectedPhotoId] = useState(null)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState("")
   const idsKey = JSON.stringify(images)
@@ -124,40 +130,38 @@ function JournalVisionPanel({ images = [], busyId, error, result, onAnalyze }) {
   }, [idsKey])
 
   if (!images.length) return null
+  const selectedPhoto = photos.find((p) => String(p.id) === String(selectedPhotoId)) || photos[0]
+  const activePhotoId = selectedPhoto?.id
   return (
-    <div className="mt-4">
-      <div className="flex items-center gap-2">
-        <Sparkles size={19} className="text-violet-600" />
-        <h3 className="text-lg font-bold text-slate-900">Choisir une photo</h3>
+    <section className="mt-5 space-y-5" aria-label="Analyse visuelle du journal">
+      <div className="flex items-start gap-3">
+        <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-[#e4efff] text-blue-700"><Images size={21}/></span>
+        <div><h3 className="text-lg font-semibold tracking-tight text-slate-900">Explorer mes photos</h3><p className="mt-1 text-sm leading-6 text-slate-500">Choisissez un souvenir à analyser. Votre journal reste inchangé.</p></div>
       </div>
-      <p className="mt-2 text-base leading-7 text-slate-600">Choisissez une photo. L'analyse est facultative et ne modifie pas votre journal.</p>
-      {loading && <p className="mt-3 text-sm">Chargement des photos...</p>}
-      {loadError && <p role="alert" className="mt-3 text-sm text-red-600">{loadError}</p>}
-      {!loading && !loadError && photos.length === 0 && <p className="mt-3 text-sm text-slate-600">Aucune image compatible attachée à cette entrée.</p>}
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        {photos.map((photo) => (
-          <div key={photo.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-            <img src={photo.file_url || photo.url || photo.file} alt={photo.title || "Photo du journal"} className="aspect-square w-full rounded-lg object-cover" />
-            <p className="mt-2 truncate text-sm font-semibold text-slate-700">{photo.title || "Photo"}</p>
-            <Button variant="ai" className="mt-2 w-full" disabled={Boolean(busyId)} onClick={() => onAnalyze(photo.id)}>
-              <Sparkles size={15} /> {String(busyId) === String(photo.id) ? "Analyse en cours..." : "Analyser cette photo"}
-            </Button>
+      {loading && <p role="status" className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">Chargement des photos...</p>}
+      {loadError && <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{loadError}</p>}
+      {!loading && !loadError && photos.length === 0 && <p className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-500">Aucune image compatible attachée à cette entrée.</p>}
+      {selectedPhoto && <>
+        <div className="overflow-hidden rounded-[22px] border border-[#d8e7f8] bg-[#f8fbff]">
+          <div className="flex h-56 items-center justify-center bg-[#edf5ff] sm:h-64">
+            <img src={selectedPhoto.file_url || selectedPhoto.url || selectedPhoto.file} alt={selectedPhoto.title || 'Photo sélectionnée'} className="h-full w-full object-contain"/>
           </div>
-        ))}
-      </div>
-      {busyId && <p role="status" className="mt-3 text-sm text-violet-700">Llama 3.2 Vision analyse votre photo. Cela peut prendre un moment...</p>}
-      {error && <p role="alert" className="mt-3 text-sm text-red-600">{error}</p>}
-      {result && !busyId && (
-        <div className="mt-4 max-h-[560px] space-y-4 overflow-y-auto rounded-xl border border-violet-100 bg-violet-50/50 p-5 text-base leading-8">
-          <p><strong>Description :</strong> {result.description}</p>
-          <div>
-            <strong>Suggestion pour votre journal :</strong>
-            <p className="mt-2 whitespace-pre-wrap rounded-xl border border-violet-100 bg-violet-50/50 p-4">{result.journal_suggestion}</p>
-          </div>
-          <p className="text-xs text-slate-500">Texte proposé par l'IA : vérifiez-le avant de l'utiliser. Aucune modification automatique.</p>
+          <div className="flex items-center justify-between gap-3 px-4 py-3"><p className="min-w-0 truncate text-sm font-semibold text-slate-800">{selectedPhoto.title || 'Mon souvenir'}</p><span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[11px] text-slate-500">{photos.length} photo{photos.length > 1 ? 's' : ''}</span></div>
         </div>
-      )}
-    </div>
+        {photos.length > 1 && <div className="flex gap-2 overflow-x-auto pb-1" aria-label="Sélectionner une photo">
+          {photos.map((photo) => <button key={photo.id} type="button" onClick={() => setSelectedPhotoId(photo.id)} aria-label={`Choisir ${photo.title || 'cette photo'}`} aria-pressed={String(activePhotoId) === String(photo.id)} className={`relative size-16 shrink-0 overflow-hidden rounded-xl border-2 transition hover:scale-[1.04] ${String(activePhotoId) === String(photo.id) ? 'border-blue-600 ring-2 ring-blue-100' : 'border-transparent hover:border-slate-300'}`}><img src={photo.file_url || photo.url || photo.file} alt="" className="size-full object-cover"/></button>)}
+        </div>}
+        <button type="button" disabled={Boolean(busyId)} onClick={() => onAnalyze(activePhotoId)} className="group flex min-h-12 w-full items-center justify-center gap-2.5 rounded-2xl bg-[#173c70] px-4 py-3 text-sm font-semibold text-white shadow-[0_10px_25px_-14px_rgba(20,25,40,.7)] transition hover:-translate-y-0.5 hover:bg-[#23569a] disabled:cursor-wait disabled:opacity-60"><Sparkles size={17}/>{busyId ? 'Analyse en cours...' : 'Analyser cette photo'}{!busyId && <ArrowUpRight size={16} className="transition group-hover:translate-x-0.5 group-hover:-translate-y-0.5"/>}</button>
+      </>}
+      {busyId && <div role="status" className="flex items-center gap-3 rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-800"><span className="size-4 shrink-0 animate-spin rounded-full border-2 border-blue-200 border-t-blue-700"/>Llama 3.2 Vision examine votre photo. Cela peut prendre un moment...</div>}
+      {error && <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
+      {result && !busyId && <div className="space-y-4 rounded-[22px] border border-[#d8e8fc] bg-[#f6faff] p-5" aria-live="polite">
+        <div className="flex items-center gap-2 text-sm font-semibold text-blue-800"><Sparkles size={16}/> Résultat de l'analyse</div>
+        <div><p className="text-xs font-bold uppercase tracking-[.12em] text-slate-500">Description</p><p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-700">{result.description}</p></div>
+        <div className="rounded-2xl bg-white p-4"><p className="text-xs font-bold uppercase tracking-[.12em] text-blue-700">Suggestion d'écriture</p><p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-700">{result.journal_suggestion}</p></div>
+        <p className="text-xs leading-5 text-slate-500">Suggestion générée par IA, à vérifier. Aucun changement automatique.</p>
+      </div>}
+    </section>
   )
 }
 
@@ -533,6 +537,7 @@ export function JournalPage({ mode = "list" }) {
   const [status, setStatus] = useState("all")
   const [dateFrom, setDateFrom] = useState("")
   const [dateTo, setDateTo] = useState("")
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false)
   const [page, setPage] = useState(1)
   const pageSize = 10
   const [results, setResults] = useState([])
@@ -686,70 +691,80 @@ export function JournalPage({ mode = "list" }) {
     if (!item) return <Empty title="Entrée introuvable" />
     return (
       <>
-        <div className="mx-auto max-w-7xl">
-          <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-            <Link to="/journal" className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:border-violet-300 hover:text-violet-700"><ArrowLeft size={15} /> Toutes mes entrées</Link>
-            <span className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">MindLog / Journal personnel</span>
-          </div>
-          <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_440px]">
-            <article className="min-w-0 overflow-hidden rounded-[32px] border border-slate-200 bg-white shadow-[0_18px_60px_-35px_rgba(15,23,42,0.32)]">
-              <header className="relative isolate overflow-hidden bg-[#18172f] px-7 pb-10 pt-9 text-white md:px-11 md:pb-12 md:pt-11">
-                <div aria-hidden="true" className="pointer-events-none absolute -right-20 -top-28 size-80 rounded-full bg-violet-500/25 blur-3xl" />
-                <div aria-hidden="true" className="pointer-events-none absolute -bottom-32 left-1/3 size-72 rounded-full bg-fuchsia-400/10 blur-3xl" />
-                <div className="relative flex flex-wrap items-center gap-2">
-                  <span className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-violet-100"><span className="size-2 rounded-full" style={{backgroundColor: moodColors[item.mood] || '#a78bfa'}} />{item.mood}</span>
-                  {item.draft && <span className="rounded-full border border-amber-300/30 bg-amber-300/10 px-3 py-1.5 text-xs font-semibold text-amber-200">Brouillon</span>}
-                  <span className="ml-auto inline-flex items-center gap-2 text-xs font-medium text-slate-300"><CalendarDays size={14} />{item.date}</span>
+        <div className="w-full">
+          <nav className="mb-7 flex flex-wrap items-center justify-between gap-4" aria-label="Navigation du journal">
+            <Link to="/journal" className="group inline-flex items-center gap-2 text-sm font-semibold text-slate-600 transition hover:text-slate-950"><span className="grid size-9 place-items-center rounded-xl border border-slate-200 bg-white transition group-hover:-translate-x-1"><ArrowLeft size={16}/></span> Retour à ma bibliothèque</Link>
+            <span className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">MON JOURNAL <span className="mx-2 text-slate-300">/</span> LECTURE</span>
+          </nav>
+          <div className="grid items-start gap-5 2xl:gap-7 lg:grid-cols-[minmax(0,1fr)_minmax(360px,420px)] xl:grid-cols-[minmax(0,1fr)_minmax(390px,460px)]">
+            <article className="min-w-0 overflow-hidden rounded-[26px] border border-[#dce7f5] bg-[#ffffff] shadow-[0_16px_55px_-40px_rgba(35,33,25,.32)]">
+              <header className="relative overflow-hidden border-b border-[#e1ebf7] bg-[#edf5ff] px-6 pb-8 pt-8 md:px-9 md:pb-10 md:pt-10 xl:px-11">
+                <div className="absolute right-0 top-0 h-full w-2 bg-[#4b9ce5]" aria-hidden="true"/>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#4778ae]"><BookOpen size={15}/> Journal personnel</span>
+                  <span className="inline-flex items-center gap-2 text-sm text-slate-500"><CalendarDays size={15}/>{item.date}</span>
                 </div>
-                <p className="relative mt-9 text-[11px] font-bold uppercase tracking-[0.28em] text-violet-300">Une page de mon histoire</p>
-                <h1 className="relative mt-3 max-w-2xl break-words text-3xl font-extrabold leading-tight tracking-tight md:text-5xl">{item.title}</h1>
-                {(item.tags || []).length > 0 && <div className="relative mt-6 flex flex-wrap gap-2">{item.tags.map((tag) => <span key={tag} className="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs text-slate-200">#{tag}</span>)}</div>}
+                <h1 className="mt-7 break-words font-serif text-[40px] font-medium leading-[1.12] tracking-[-0.045em] text-[#142b49] md:text-[54px] xl:text-[60px]">{item.title}</h1>
+                <div className="mt-7 flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center gap-2 rounded-full border border-[#d6e5f7] bg-white/80 px-3 py-1.5 text-xs font-semibold text-slate-700"><span className="size-2 rounded-full" style={{backgroundColor:moodColors[item.mood] || '#a78bfa'}}/>{item.mood || 'Sans humeur'}</span>
+                  {item.draft && <span className="rounded-full bg-blue-100 px-3 py-1.5 text-xs font-semibold text-blue-800">Brouillon</span>}
+                  {item.pinned && <span className="inline-flex items-center gap-1 rounded-full bg-[#e1efff] px-3 py-1.5 text-xs font-semibold text-[#315d8d]"><Pin size={12}/> Épinglée</span>}
+                  {(item.tags || []).map((tag) => <span key={tag} className="rounded-full border border-[#d6e5f7] px-3 py-1.5 text-xs text-slate-500">#{tag}</span>)}
+                </div>
               </header>
-              <div className="px-7 py-9 md:px-11 md:py-11">
-                <div className="mb-6 flex items-center gap-3"><span className="h-px w-9 bg-violet-400"/><span className="text-[11px] font-bold uppercase tracking-[0.2em] text-violet-600">Mon récit</span></div>
-                <div className="whitespace-pre-wrap break-words text-[19px] leading-[1.95] text-slate-700 md:text-[21px]">
+              <div className="px-6 py-8 md:px-9 md:py-10 xl:px-11">
+                <div className="mb-7 flex items-center gap-3"><span className="h-px w-10 bg-[#68a8ed]"/><span className="text-[11px] font-bold uppercase tracking-[0.24em] text-[#3674b5]">Le récit</span></div>
+                <div className="whitespace-pre-wrap break-words font-serif text-[18px] leading-[1.9] text-[#314765] md:text-[20px]">
                   {item.content || <span className="italic text-slate-400">Cette entrée ne contient pas encore de texte.</span>}
                 </div>
-                {(item.images || []).length > 0 && <section className="mt-9 border-t border-slate-100 pt-7">
-                  <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-base font-bold text-slate-900">Souvenirs associés</h2><p className="mt-1 text-xs text-slate-500">Photos et vidéos de cette journée</p></div><button type="button" onClick={() => setAssistantTab('photo')} className="inline-flex items-center gap-1.5 rounded-full bg-violet-50 px-3 py-2 text-xs font-semibold text-violet-700 transition hover:bg-violet-100"><Sparkles size={14}/> Analyser avec l'IA</button></div>
+                {(item.images || []).length > 0 && <section className="mt-11 border-t border-[#e1ebf7] pt-9">
+                  <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-serif text-2xl font-medium text-[#152d4c]">Les images de ce jour</h2><p className="mt-1 text-xs text-slate-500">Les photos que vous avez choisies pour cette histoire</p></div><button type="button" onClick={() => setAssistantTab('photo')} title="Analyser les photos avec l’IA" aria-label="Analyser les photos avec l’IA" className="grid size-10 place-items-center rounded-xl border border-[#cfe1f7] bg-[#eef6ff] text-[#3575b9] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#dceeff]"><Sparkles size={18}/></button></div>
                   <JournalPhotos ids={item.images || []} />
                 </section>}
-                <footer className="mt-9 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-6">
-                  <span className="text-xs text-slate-400">Un espace pour garder ce qui compte.</span>
-                  <div className="flex flex-wrap gap-2">
-                    <button type="button" onClick={() => togglePinned(item)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-violet-300 hover:bg-violet-50"><Pin size={16} className={item.pinned ? "fill-violet-600 text-violet-600" : ""}/>{item.pinned ? "Désépingler" : "Épingler"}</button>
-                    <button type="button" disabled={exportBusy} onClick={() => exportJournalPdf(item)} className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-violet-700 disabled:opacity-50"><Download size={16}/>{exportBusy ? "Export en cours..." : "Télécharger le PDF"}</button>
-                    <Link to={`/journal/${item.id}/edit`}><Button variant="secondary"><Edit3 size={15}/> Modifier</Button></Link>
-                    <Button variant="danger" onClick={() => setConfirm(true)}><Trash2 size={15}/> Supprimer</Button>
+                <footer className="mt-12 border-t border-[#e1ebf7] pt-6">
+                  <div className="flex flex-wrap items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#648cb9]">Votre histoire, vos souvenirs</p>
+                      <p className="mt-1 text-sm text-slate-500">Gardez cette page, partagez-la ou retrouvez-la plus tard.</p>
+                    </div>
+                    <div className="flex items-center gap-2 rounded-2xl border border-[#dce7f5] bg-white/90 p-1.5 shadow-[0_6px_20px_-14px_rgba(35,33,25,.28)]" role="group" aria-label="Actions sur cette entrée">
+                      <button type="button" disabled={exportBusy} onClick={() => exportJournalPdf(item)} title="Télécharger le PDF" aria-label={exportBusy ? 'Export PDF en cours' : 'Télécharger le PDF'} className="group relative grid size-10 place-items-center rounded-xl bg-[#17477e] text-white transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#245e9d] hover:shadow-md disabled:cursor-wait disabled:opacity-50"><Download size={18} strokeWidth={1.9}/></button>
+                      <span className="mx-0.5 h-6 w-px bg-[#dce7f5]" aria-hidden="true"/>
+                      <Link to={`/journal/${item.id}/edit`} title="Modifier cette histoire" aria-label="Modifier cette histoire" className="grid size-10 place-items-center rounded-xl text-[#6b7280] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#eaf3ff] hover:text-[#3b4654]"><Edit3 size={18} strokeWidth={1.9}/></Link>
+                      <button type="button" onClick={() => togglePinned(item)} title={item.pinned ? 'Désépingler cette histoire' : 'Épingler cette histoire'} aria-label={item.pinned ? 'Désépingler cette histoire' : 'Épingler cette histoire'} aria-pressed={Boolean(item.pinned)} className={`grid size-10 place-items-center rounded-xl transition-all duration-200 hover:-translate-y-0.5 ${item.pinned ? 'bg-blue-50 text-blue-700 hover:bg-blue-100' : 'text-[#6b7280] hover:bg-[#eaf3ff] hover:text-[#3979b7]'}`}><Pin size={18} strokeWidth={1.9} className={item.pinned ? 'fill-blue-600/20' : ''}/></button>
+                      <span className="mx-0.5 h-6 w-px bg-[#dce7f5]" aria-hidden="true"/>
+                      <button type="button" onClick={() => setConfirm(true)} title="Supprimer cette histoire" aria-label="Supprimer cette histoire" className="grid size-10 place-items-center rounded-xl text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:bg-rose-50 hover:text-rose-600"><Trash2 size={18} strokeWidth={1.9}/></button>
+                    </div>
                   </div>
+                  {exportBusy && <p className="mt-3 text-right text-xs text-slate-500" role="status">Préparation de votre PDF…</p>}
                 </footer>
                 {error && <p className="mt-3 text-sm text-red-600" role="alert">{error}</p>}
               </div>
             </article>
-            <aside className="min-w-0 space-y-5 xl:sticky xl:top-6">
-              <section className="overflow-hidden rounded-[28px] border border-violet-200/70 bg-white shadow-[0_15px_45px_-28px_rgba(109,40,217,0.35)]">
-                <div className="bg-gradient-to-br from-violet-100 via-white to-fuchsia-50 px-6 pb-5 pt-6">
-                  <div className="flex items-center gap-3"><span className="grid size-12 place-items-center rounded-2xl bg-violet-600 text-white shadow-lg shadow-violet-600/20"><Sparkles size={22}/></span><div><p className="text-[10px] font-bold uppercase tracking-[0.18em] text-violet-600">Votre compagnon d'écriture</p><h2 className="mt-0.5 text-2xl font-extrabold tracking-tight text-slate-900">MindLog AI</h2></div></div>
+            <aside className="min-w-0 space-y-5 lg:sticky lg:top-6">
+              <section className="overflow-hidden rounded-[26px] border border-[#dce8f8] bg-white shadow-[0_16px_48px_-34px_rgba(54,45,84,.34)]">
+                <div className="border-b border-[#dfeaf9] bg-gradient-to-br from-[#f4f9ff] via-white to-[#e9f3ff] px-6 pb-6 pt-6">
+                  <div className="flex items-center gap-3"><span className="grid size-12 place-items-center rounded-xl bg-slate-900 text-white"><Sparkles size={22}/></span><div><p className="text-[10px] font-bold uppercase tracking-[0.18em] text-blue-600">Votre compagnon d'écriture</p><h2 className="mt-0.5 text-2xl font-extrabold tracking-tight text-slate-900">MindLog AI</h2></div></div>
                   <p className="mt-4 text-base leading-7 text-slate-600">Explorez vos pensées et vos souvenirs grâce à une analyse intelligente, à votre rythme.</p>
                 </div>
-                <div className="p-5">
+                <div className="p-6">
                   <div className="grid grid-cols-2 gap-2 rounded-2xl bg-slate-100 p-1.5" role="tablist" aria-label="Fonctions de l'assistant IA">
-                    <button type="button" role="tab" aria-selected={assistantTab === 'text'} onClick={() => setAssistantTab('text')} className={`flex items-center justify-center gap-1.5 rounded-xl px-3 py-3.5 text-sm font-bold transition ${assistantTab === 'text' ? 'bg-white text-violet-700 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}><Edit3 size={14}/> Mon texte</button>
-                    <button type="button" role="tab" aria-selected={assistantTab === 'photo'} onClick={() => setAssistantTab('photo')} className={`flex items-center justify-center gap-1.5 rounded-xl px-3 py-3.5 text-sm font-bold transition ${assistantTab === 'photo' ? 'bg-white text-violet-700 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}><ImageIcon size={14}/> Mes photos</button>
+                    <button type="button" role="tab" aria-selected={assistantTab === 'text'} onClick={() => setAssistantTab('text')} className={`flex items-center justify-center gap-1.5 rounded-xl px-3 py-3.5 text-sm font-bold transition ${assistantTab === 'text' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}><Edit3 size={14}/> Mon texte</button>
+                    <button type="button" role="tab" aria-selected={assistantTab === 'photo'} onClick={() => setAssistantTab('photo')} className={`flex items-center justify-center gap-1.5 rounded-xl px-3 py-3.5 text-sm font-bold transition ${assistantTab === 'photo' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}><ImageIcon size={14}/> Mes photos</button>
                   </div>
                   {assistantTab === 'text' ? <div className="mt-5 space-y-4" role="tabpanel">
-                    <div className="rounded-2xl border border-violet-100 bg-violet-50/60 p-4"><p className="text-lg font-bold text-slate-900">Comprendre mes émotions</p><p className="mt-2 text-base leading-7 text-slate-600">Découvrez les émotions, les thèmes et une question pour réfléchir à votre récit.</p></div>
-                    <Button variant="ai" className="w-full" disabled={aiLoading || !item.content?.trim()} onClick={analyzeJournal}><Sparkles size={16}/>{aiLoading ? 'Analyse en cours...' : aiAnalysis ? "Relancer l'analyse" : 'Lancer mon analyse'}</Button>
-                    {aiLoading && <p role="status" className="text-xs text-violet-700">Llama 3.2 analyse votre texte...</p>}
+                    <div className="rounded-2xl border border-blue-100 bg-blue-50/60 p-4"><p className="text-lg font-bold text-slate-900">Comprendre mes émotions</p><p className="mt-2 text-base leading-7 text-slate-600">Découvrez les émotions, les thèmes et une question pour réfléchir à votre récit.</p></div>
+                    <button type="button" disabled={aiLoading || !item.content?.trim()} onClick={analyzeJournal} className="group flex w-full items-center justify-between gap-3 rounded-2xl bg-[#17477e] px-4 py-3.5 text-left text-sm font-semibold text-white shadow-[0_12px_24px_-18px_rgba(35,45,60,.75)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#2562a5] disabled:cursor-not-allowed disabled:opacity-50"><span className="flex items-center gap-2.5"><Sparkles size={17}/>{aiLoading ? 'Analyse en cours...' : aiAnalysis ? "Relancer l’analyse" : 'Analyser mon récit'}</span><ArrowUpRight size={17} className="transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5"/></button>
+                    {aiLoading && <p role="status" className="text-xs text-blue-700">Llama 3.2 analyse votre texte...</p>}
                     {aiError && <p role="alert" className="text-sm text-red-600">{aiError}</p>}
                     {aiAnalysis && !aiLoading && <div className="max-h-[620px] space-y-5 overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50/80 p-5 text-base leading-8">
-                      <div><p className="text-[10px] font-bold uppercase tracking-widest text-violet-600">Émotion dominante</p><p className="mt-1 text-xl font-extrabold text-slate-900">{aiAnalysis.primary_emotion}</p></div>
-                      <div><p className="text-xs font-bold text-slate-700">Émotions secondaires</p><div className="mt-2 flex flex-wrap gap-1">{(aiAnalysis.secondary_emotions || []).length ? aiAnalysis.secondary_emotions.map((emotion,index)=><Badge key={`${emotion}-${index}`} className="bg-white text-violet-800">{emotion}</Badge>):<span className="text-slate-500">Aucune identifiée</span>}</div></div>
+                      <div><p className="text-[10px] font-bold uppercase tracking-widest text-blue-600">Émotion dominante</p><p className="mt-1 text-xl font-extrabold text-slate-900">{aiAnalysis.primary_emotion}</p></div>
+                      <div><p className="text-xs font-bold text-slate-700">Émotions secondaires</p><div className="mt-2 flex flex-wrap gap-1">{(aiAnalysis.secondary_emotions || []).length ? aiAnalysis.secondary_emotions.map((emotion,index)=><Badge key={`${emotion}-${index}`} className="bg-white text-blue-800">{emotion}</Badge>):<span className="text-slate-500">Aucune identifiée</span>}</div></div>
                       <div><p className="text-xs font-bold text-slate-700">Résumé</p><p className="mt-1 text-slate-600">{aiAnalysis.summary}</p></div>
                       <div><p className="text-xs font-bold text-slate-700">Observation</p><p className="mt-1 text-slate-600">{aiAnalysis.insight}</p></div>
-                      <div className="rounded-xl bg-white p-3"><p className="text-xs font-bold text-violet-700">Pour aller plus loin</p><p className="mt-1 text-slate-700">{aiAnalysis.reflection_question}</p></div>
+                      <div className="rounded-xl bg-white p-3"><p className="text-xs font-bold text-blue-700">Pour aller plus loin</p><p className="mt-1 text-slate-700">{aiAnalysis.reflection_question}</p></div>
                     </div>}
-                  </div> : <div className="mt-4" role="tabpanel"><JournalVisionPanel images={item.images || []} busyId={photoBusyId} error={photoError} result={photoAnalysis} onAnalyze={analyzePhoto}/></div>}
+                  </div> : <div className="mt-3" role="tabpanel"><JournalVisionPanel images={item.images || []} busyId={photoBusyId} error={photoError} result={photoAnalysis} onAnalyze={analyzePhoto}/></div>}
                   <p className="mt-5 border-t border-slate-100 pt-4 text-sm leading-6 text-slate-500">Analyse locale avec Llama 3.2. Les résultats sont des suggestions, pas un diagnostic.</p>
                 </div>
               </section>
@@ -768,24 +783,24 @@ export function JournalPage({ mode = "list" }) {
 
   return (
     <>
-      <div className="mb-7 overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-r from-white via-violet-50/70 to-indigo-50/70 p-7 shadow-sm md:p-9">
-        <div className="flex flex-wrap items-center justify-between gap-5">
-          <div><div className="mb-3 inline-flex items-center gap-2 rounded-full border border-violet-200 bg-white/80 px-3 py-1 text-xs font-bold uppercase tracking-[0.15em] text-violet-700"><Sparkles size={13} /> Votre espace personnel</div><h1 className="text-3xl font-bold tracking-tight text-slate-900 md:text-4xl">Mon journal<span className="text-violet-600">.</span></h1><p className="mt-2 max-w-lg text-sm leading-6 text-slate-500">Un espace calme pour raconter vos journées, suivre vos émotions et retrouver vos souvenirs.</p></div>
-          <Link to="/journal/new"><Button><Plus size={17} /> Nouvelle entrée</Button></Link>
+      <section className="relative mb-8 overflow-hidden rounded-[28px] border border-[#d8e7f8] bg-[#edf5ff]">
+        <div aria-hidden="true" className="pointer-events-none absolute -right-20 -top-32 size-96 rounded-full border-[55px] border-[#dcecff]/60"/>
+        <div className="relative grid gap-7 px-7 pb-9 pt-10 md:grid-cols-[minmax(0,1fr)_auto] md:items-end md:px-11 md:pb-11 md:pt-12">
+          <div>
+            <p className="mb-5 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.24em] text-[#4b82ba]"><BookOpen size={15}/> MON CARNET PERSONNEL</p>
+            <h1 className="font-serif text-[46px] font-medium leading-none tracking-[-0.055em] text-[#152d4c] md:text-[70px]">Mes histoires<span className="text-[#3d89d8]">.</span></h1>
+            <p className="mt-5 max-w-xl text-[15px] leading-7 text-[#5a7495]">Un endroit pour déposer vos pensées, retrouver vos souvenirs et mesurer le chemin parcouru.</p>
+            <div className="mt-7 flex flex-wrap items-center gap-3 text-sm text-[#5b7b9e]"><span className="inline-flex items-center gap-2 rounded-full border border-[#cfe0f5] bg-white/80 px-4 py-2"><BookOpen size={15}/><strong className="text-slate-800">{count}</strong> {count > 1 ? 'histoires' : 'histoire'} conservée{count > 1 ? 's' : ''}</span><span className="hidden h-1 w-1 rounded-full bg-[#8cb7e3] sm:block"/><span>Chaque page compte.</span></div>
+          </div>
+          <Link to="/journal/new" className="inline-flex min-h-12 w-fit items-center justify-center gap-3 rounded-xl bg-[#173c70] px-6 py-3.5 text-sm font-semibold text-white shadow-lg shadow-slate-900/10 transition hover:-translate-y-0.5 hover:bg-[#39475c]"><Plus size={18}/> Nouvelle histoire <ArrowUpRight size={16}/></Link>
         </div>
-      </div>
-      <div className="mb-6 flex flex-wrap gap-3">
-        <Button variant="ai" onClick={() => setShowChat((v) => !v)}>
-          <MessageCircle size={16} /> {showChat ? "Fermer le chat IA" : "Discuter avec mon journal"}
-        </Button>
-        <Button variant="secondary" onClick={() => setShowAnalytics((value) => !value)}>
-          {showAnalytics ? "Masquer les statistiques" : "Voir les statistiques du journal"}
-        </Button>
-        {showAnalytics && <Button variant="secondary" onClick={() => setAnalyticsRevision((n) => n + 1)}>
-          Actualiser les statistiques
-        </Button>}
-      </div>
-      {showChat && <Card className="mb-6 space-y-4 rounded-3xl border border-violet-100 bg-white p-6 shadow-sm">
+        <div className="relative flex flex-wrap gap-2 border-t border-[#d8e7f8] bg-white/55 px-7 py-4 md:px-11">
+          <button type="button" className="inline-flex items-center gap-2 rounded-xl border border-[#d5e5f8] bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-[#e7f2ff]" aria-expanded={showChat} onClick={() => setShowChat((v) => !v)}><MessageCircle size={16}/>{showChat ? 'Fermer la discussion' : 'Discuter avec mon journal'}</button>
+          <button type="button" className="inline-flex items-center gap-2 rounded-xl border border-[#d5e5f8] bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-[#e7f2ff]" aria-expanded={showAnalytics} onClick={() => setShowAnalytics((v) => !v)}><BarChart size={16}/>{showAnalytics ? 'Masquer les statistiques' : 'Voir mes statistiques'}</button>
+          {showAnalytics && <button type="button" className={actionSubtle} onClick={() => setAnalyticsRevision((n) => n + 1)}><RotateCcw size={15}/> Actualiser</button>}
+        </div>
+      </section>
+      {showChat && <Card className="mb-6 space-y-4 rounded-3xl border border-blue-100 bg-white p-6 shadow-sm">
         <SectionTitle title="Ask My Journal — Chat IA" subtitle="Posez des questions sur vos entrées enregistrées." />
         <div className="max-h-96 space-y-4 overflow-y-auto" aria-live="polite">
           {chatMessages.length === 0 && <p className="text-sm text-slate-500">Exemple : Qu’est-ce qui m’a rendu heureux récemment ?</p>}
@@ -794,7 +809,7 @@ export function JournalPage({ mode = "list" }) {
             <p className="whitespace-pre-wrap"><strong>Assistant :</strong> {msg.answer}</p>
             {msg.sources.length > 0 && <div className="flex flex-wrap gap-2">
               <span className="text-xs text-slate-500">Entrées consultées :</span>
-              {msg.sources.map((src) => <Link key={src.id} to={`/journal/${src.id}`} className="text-xs font-semibold text-violet-600 underline">{src.title} ({src.date})</Link>)}
+              {msg.sources.map((src) => <Link key={src.id} to={`/journal/${src.id}`} className="text-xs font-semibold text-blue-600 underline">{src.title} ({src.date})</Link>)}
             </div>}
           </div>)}
         </div>
@@ -872,68 +887,64 @@ export function JournalPage({ mode = "list" }) {
           )}
         </div>
       )}
-      <Card className="mb-6 space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="relative">
-          <Search className="absolute left-3 top-3 text-slate-400" size={18} />
-          <input value={q} onChange={(e) => { setQ(e.target.value); resetPage() }}
-            className="w-full rounded-xl border border-slate-200 py-2.5 pl-10 pr-3 outline-none focus:ring-4 focus:ring-violet-100"
-            placeholder="Recherche dynamique : titre, contenu, tags..." aria-label="Rechercher" />
+      <section className="mb-6 overflow-hidden rounded-[22px] border border-[#dbe7f5] bg-white shadow-[0_8px_30px_-24px_rgba(35,40,50,.25)]" aria-label="Recherche et filtres du journal">
+        <div className="flex flex-col gap-3 p-3 sm:p-4 lg:flex-row lg:items-center">
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[#8ca9ca]" size={18}/>
+            <input value={q} onChange={(e) => {setQ(e.target.value); resetPage()}} className="h-12 w-full rounded-xl border border-[#dce8f7] bg-[#f6faff] pl-11 pr-10 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-[#6fa7e5] focus:bg-white focus:ring-2 focus:ring-[#e3f0ff]" placeholder="Rechercher dans mes histoires..." aria-label="Rechercher dans mes entrées" />
+            {q && <button type="button" onClick={() => {setQ(''); setDebouncedQ(''); resetPage()}} className="absolute right-3 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-lg text-slate-400 hover:bg-slate-200 hover:text-slate-700" aria-label="Effacer la recherche"><X size={15}/></button>}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative min-w-[155px] flex-1 sm:flex-none">
+              <label htmlFor="journal-sort" className="sr-only">Trier les histoires</label>
+              <select id="journal-sort" value={sort} onChange={(e) => {setSort(e.target.value); resetPage()}} className="h-11 w-full appearance-none rounded-xl border border-[#dbe7f5] bg-white py-2 pl-3.5 pr-9 text-sm font-medium text-slate-700 outline-none transition hover:border-[#8cb9e9] focus:ring-2 focus:ring-blue-100">
+                <option value="-date">Plus récentes</option><option value="date">Plus anciennes</option><option value="title">Titre A–Z</option><option value="-title">Titre Z–A</option>
+              </select>
+              <ChevronDown size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"/>
+            </div>
+            <button type="button" onClick={() => setShowAdvancedFilters((v) => !v)} aria-expanded={showAdvancedFilters} aria-controls="journal-advanced-filters" className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition ${showAdvancedFilters || mood || dateFrom || dateTo ? 'border-[#80ade1] bg-[#e8f3ff] text-[#245b95]' : 'border-[#dbe7f5] bg-white text-slate-700 hover:border-[#8cb9e9] hover:bg-[#f4f9ff]'}`}><SlidersHorizontal size={16}/> Filtres{(mood || dateFrom || dateTo) && <span className="grid size-5 place-items-center rounded-full bg-[#b58b56] text-[11px] text-white">{[mood,dateFrom,dateTo].filter(Boolean).length}</span>}<ChevronDown size={14} className={`transition-transform ${showAdvancedFilters ? 'rotate-180' : ''}`}/></button>
+          </div>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <Select value={sort} onChange={(e) => { setSort(e.target.value); resetPage() }}>
-            <option value="-date">Plus récent</option>
-            <option value="date">Plus ancien</option>
-            <option value="title">Titre A–Z</option>
-            <option value="-title">Titre Z–A</option>
-          </Select>
-          <Select value={mood} onChange={(e) => { setMood(e.target.value); resetPage() }}>
-            <option value="">Toutes les humeurs</option>
-            {Object.keys(moodColors).map((x) => <option key={x} value={x}>{x}</option>)}
-          </Select>
-          <Select value={status} onChange={(e) => { setStatus(e.target.value); resetPage() }}>
-            <option value="all">Toutes les entrées</option>
-            <option value="favorite">Favoris</option>
-            <option value="pinned">Épinglées</option>
-            <option value="draft">Brouillons</option>
-            <option value="published">Publiées</option>
-          </Select>
-          <Button variant="secondary" onClick={() => {
-            setQ(""); setDebouncedQ(""); setSort("-date"); setMood(""); setStatus("all");
-            setDateFrom(""); setDateTo(""); setPage(1)
-          }}>Réinitialiser les filtres</Button>
+        <div className="flex flex-wrap items-center gap-2 border-t border-[#e6eef9] px-4 py-3">
+          <span className="mr-1 hidden text-[11px] font-semibold uppercase tracking-[0.12em] text-[#6988ab] sm:inline">Afficher</span>
+          {[{value:'all',label:'Toutes'},{value:'favorite',label:'Favoris',icon:Heart},{value:'pinned',label:'Épinglées',icon:Pin},{value:'draft',label:'Brouillons'},{value:'published',label:'Publiées'}].map((filter) => <button key={filter.value} type="button" aria-pressed={status === filter.value} onClick={() => {setStatus(filter.value); resetPage()}} className={`inline-flex min-h-9 items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${status === filter.value ? 'bg-[#17477e] text-white shadow-sm' : 'bg-[#f1f6fc] text-[#5e7899] hover:bg-[#e1efff] hover:text-slate-900'}`}>{filter.icon && <filter.icon size={13}/>} {filter.label}</button>)}
+          {(q || sort !== '-date' || mood || status !== 'all' || dateFrom || dateTo) && <button type="button" onClick={() => {setQ('');setDebouncedQ('');setSort('-date');setMood('');setStatus('all');setDateFrom('');setDateTo('');setPage(1)}} className="ml-auto inline-flex min-h-9 items-center gap-1.5 rounded-full px-3 text-xs font-semibold text-[#3676b6] transition hover:bg-blue-50"><RotateCcw size={13}/> Réinitialiser</button>}
         </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Input label="Date de début" type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); resetPage() }} />
-          <Input label="Date de fin" type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); resetPage() }} />
-        </div>
-      </Card>
+        {showAdvancedFilters && <div id="journal-advanced-filters" className="border-t border-[#dce9f8] bg-[#f7fbff] px-4 py-4 sm:px-5">
+          <div className="mb-3 flex items-center justify-between gap-2"><p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#5279a3]">Affiner la recherche</p><button type="button" onClick={() => setShowAdvancedFilters(false)} className="rounded-lg p-1.5 text-slate-500 transition hover:bg-[#dce9f8]" aria-label="Fermer les filtres avancés"><X size={16}/></button></div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div><label htmlFor="journal-mood-filter" className="mb-1.5 block text-xs font-medium text-slate-600">Humeur</label><select id="journal-mood-filter" value={mood} onChange={(e) => {setMood(e.target.value); resetPage()}} className="h-11 w-full rounded-xl border border-[#dbe7f5] bg-white px-3 text-sm text-slate-700 outline-none focus:border-[#6fa7e5]"><option value="">Toutes les humeurs</option>{Object.keys(moodColors).map((x) => <option key={x} value={x}>{x}</option>)}</select></div>
+            <div><label htmlFor="journal-date-from" className="mb-1.5 block text-xs font-medium text-slate-600">Du</label><input id="journal-date-from" type="date" value={dateFrom} max={dateTo || undefined} onChange={(e) => {setDateFrom(e.target.value); resetPage()}} className="h-11 w-full rounded-xl border border-[#dbe7f5] bg-white px-3 text-sm text-slate-700 outline-none focus:border-[#6fa7e5]"/></div>
+            <div><label htmlFor="journal-date-to" className="mb-1.5 block text-xs font-medium text-slate-600">Au</label><input id="journal-date-to" type="date" value={dateTo} min={dateFrom || undefined} onChange={(e) => {setDateTo(e.target.value); resetPage()}} className="h-11 w-full rounded-xl border border-[#dbe7f5] bg-white px-3 text-sm text-slate-700 outline-none focus:border-[#6fa7e5]"/></div>
+          </div>
+        </div>}
+      </section>
       {listError && <p className="mb-4 text-sm text-red-600" role="alert">{listError}</p>}
-      <p className="mb-4 text-sm font-medium text-slate-500">{count} entrée(s) trouvée(s) {listLoading ? "· Recherche en cours..." : ""}</p>
-      {listLoading ? <p>Chargement du journal...</p> : results.length ? (
+      <div className="mb-4 flex items-center justify-between gap-3"><p className="text-sm font-medium text-slate-500">{count} résultat{count > 1 ? 's' : ''}{listLoading ? ' · Recherche en cours...' : ''}</p><span className="text-xs text-slate-400">Page {page} sur {totalPages}</span></div>
+      {listLoading ? <div className="rounded-2xl border border-slate-200 bg-white p-12 text-center text-slate-500" role="status">Chargement de vos souvenirs...</div> : results.length ? (
         <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-          {results.map((x) => <Card key={x.id} className="group flex h-full flex-col rounded-3xl border border-slate-200 bg-white p-6 shadow-sm transition-all duration-200 hover:-translate-y-1 hover:border-violet-200 hover:shadow-lg">
-            <div className="flex justify-between">
-              <div className="flex gap-2">
-                <Badge className="bg-violet-50 text-violet-700"><span className="mr-1.5 inline-block h-2 w-2 rounded-full" style={{ backgroundColor: moodColors[x.mood] || "#8b5cf6" }} />{x.mood}</Badge>
-                {x.draft && <Badge>Brouillon</Badge>}
-                {x.pinned && <Badge>Épinglée</Badge>}
+          {results.map((x) => <article key={x.id} className="group relative flex min-h-[290px] flex-col overflow-hidden rounded-[22px] border border-[#d9e7f7] bg-white transition duration-300 hover:-translate-y-1 hover:border-[#a5c8ed] hover:shadow-[0_20px_45px_-28px_rgba(38,43,55,.35)]">
+            <div className="flex flex-1 flex-col p-6 md:p-7">
+              <div className="flex items-start justify-between gap-3">
+                <span className="inline-flex items-center gap-2 rounded-full bg-[#f0f6ff] px-3 py-1.5 text-[11px] font-semibold text-slate-700"><span className="size-2 rounded-full" style={{backgroundColor:moodColors[x.mood] || '#94a3b8'}}/>{x.mood || 'Sans humeur'}</span>
+                <div className="flex gap-1">
+                  <button type="button" className="grid size-9 place-items-center rounded-xl text-slate-400 transition hover:bg-blue-50 hover:text-blue-700" title={x.pinned ? 'Désépingler' : 'Épingler'} aria-label={x.pinned ? 'Désépingler' : 'Épingler'} onClick={() => togglePinned(x)}><Pin size={16} className={x.pinned ? 'fill-blue-600 text-blue-600' : ''}/></button>
+                  <button type="button" className="grid size-9 place-items-center rounded-xl text-slate-400 transition hover:bg-rose-50 hover:text-rose-600" title={x.favorite ? 'Retirer des favoris' : 'Ajouter aux favoris'} aria-label={x.favorite ? 'Retirer des favoris' : 'Ajouter aux favoris'} onClick={() => toggleFavorite(x)}><Heart size={17} className={x.favorite ? 'fill-rose-500 text-rose-500' : ''}/></button>
+                </div>
               </div>
-              <div className="flex items-center gap-3">
-                <button type="button" aria-label={x.pinned ? "Désépingler" : "Épingler"} onClick={() => togglePinned(x)}><Pin size={18} className={x.pinned ? "fill-violet-600 text-violet-600" : "text-slate-300"}/></button>
-                <button type="button" aria-label={x.favorite ? "Retirer des favoris" : "Ajouter aux favoris"} onClick={() => toggleFavorite(x)}><Heart size={18} className={x.favorite ? "fill-rose-500 text-rose-500" : "text-slate-300"}/></button>
+              <Link to={`/journal/${x.id}`} className="mt-6 block flex-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#3d89d8]">
+                <div className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-[#628bb7]"><CalendarDays size={13}/>{x.date}{x.draft && <span className="ml-2 rounded bg-blue-50 px-2 py-0.5 text-blue-700">Brouillon</span>}</div>
+                <h2 className="line-clamp-2 break-words font-serif text-[30px] font-medium leading-tight tracking-[-0.04em] text-[#173c70] transition group-hover:text-[#286fb7]">{x.title || 'Sans titre'}</h2>
+                <p className="mt-4 line-clamp-3 whitespace-pre-line break-words text-[14px] leading-[1.85] text-slate-500">{x.content || 'Une page à compléter...'}</p>
+              </Link>
+              <div className="mt-7 flex items-center justify-between gap-3 border-t border-[#e4edf8] pt-4">
+                <div className="flex min-w-0 flex-wrap gap-1.5">{(x.tags || []).slice(0,2).map((t) => <span key={t} className="max-w-28 truncate rounded-md bg-[#edf5ff] px-2 py-1 text-[11px] text-[#577da6]">#{t}</span>)}</div>
+                <Link to={`/journal/${x.id}`} className="inline-flex shrink-0 items-center gap-2 text-sm font-semibold text-[#275e9b] transition group-hover:gap-3">Ouvrir <ArrowUpRight size={16}/></Link>
               </div>
             </div>
-            <Link to={`/journal/${x.id}`}>
-              <h2 className="mt-5 text-xl font-bold tracking-tight text-slate-900 transition group-hover:text-violet-600">{x.title}</h2>
-              <p className="mt-3 line-clamp-3 min-h-18 text-sm leading-6 text-slate-500">{x.content}</p>
-            </Link>
-            <div className="mt-auto flex items-center gap-2 border-t border-slate-100 pt-4 text-xs text-slate-500">
-              <CalendarDays size={14} />{x.date}
-              <div className="ml-auto flex gap-1">{(x.tags || []).slice(0, 2).map((t) => <span key={t}>#{t}</span>)}</div>
-            </div>
-          </Card>)}
+          </article>)}
         </div>
-      ) : <Empty title="Aucune entrée trouvée" />}
+      ) : <div className="rounded-[24px] border border-dashed border-slate-300 bg-white px-6 py-16 text-center"><BookOpen className="mx-auto mb-4 text-slate-300" size={38}/><h2 className="text-xl font-semibold text-slate-900">Aucune page trouvée</h2><p className="mt-2 text-sm text-slate-500">Essayez d'autres filtres ou commencez une nouvelle histoire.</p><Link to="/journal/new" className={`${actionPrimary} mt-6`}><Plus size={16}/> Nouvelle entrée</Link></div>}
       {count > pageSize && (
         <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
           <Button variant="secondary" disabled={page <= 1 || listLoading} onClick={() => setPage((n) => n - 1)}>Précédent</Button>
