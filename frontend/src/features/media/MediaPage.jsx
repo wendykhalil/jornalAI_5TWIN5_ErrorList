@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Link, useNavigate, useParams } from "react-router"
 import {
   Upload,
@@ -16,6 +16,7 @@ import {
   Film,
   Music,
   CheckCircle2,
+  LoaderCircle,
 } from "lucide-react"
 import { useStore } from "../../store/AppStore"
 import { mediaService } from "../../services/mediaService"
@@ -33,6 +34,18 @@ import {
   SectionTitle,
 } from "../../components/ui"
 
+// Résolution sécurisée de l'URL d'un fichier audio (absolue ou relative)
+function resolveAudioUrl(item) {
+  if (!item?.url) return ""
+  if (item.url.startsWith("http://") || item.url.startsWith("https://")) {
+    return item.url
+  }
+  const API_BASE_URL =
+    import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"
+  const cleanBase = API_BASE_URL.replace(/\/api\/?$/, "")
+  return `${cleanBase}${item.url.startsWith("/") ? "" : "/"}${item.url}`
+}
+
 export function MediaPage({ mode = "library" }) {
   const { media, setMedia, mediaLoading, notify, uploadMedia } = useStore()
   const nav = useNavigate()
@@ -43,7 +56,7 @@ export function MediaPage({ mode = "library" }) {
   const [progress, setProgress] = useState(0)
   const [isUploading, setIsUploading] = useState(false)
   const [prompt, setPrompt] = useState(
-    "Une plage tunisienne paisible au coucher du soleil"
+    "Une plage tunisienne paisible au coucher du soleil",
   )
   const [generated, setGenerated] = useState(false)
 
@@ -66,6 +79,193 @@ export function MediaPage({ mode = "library" }) {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState(null)
+
+  // --- States pour la transcription audio (Mode 4) ---
+  const [selectedAudioId, setSelectedAudioId] = useState("")
+  const [transcriptionText, setTranscriptionText] = useState("")
+  const [transcriptionMeta, setTranscriptionMeta] = useState(null)
+  const [isTranscribing, setIsTranscribing] = useState(false)
+  const [transcriptionError, setTranscriptionError] = useState(null)
+  const [noSpeechDetected, setNoSpeechDetected] = useState(false)
+  const [isConfirmSaveModalOpen, setIsConfirmSaveModalOpen] = useState(false)
+  const [isSavingTranscription, setIsSavingTranscription] = useState(false)
+  const [saveTranscriptionError, setSaveTranscriptionError] = useState(null)
+
+  const isMountedRef = useRef(true)
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
+      isMountedRef.current = false
+    }
+  }, [])
+
+  // Médias audio appartenant à l'utilisateur connecté
+  const audioMedia = media.filter((x) => (x.media_type || x.type) === "audio")
+
+  // Initialisation du fichier audio sélectionné
+  useEffect(() => {
+    if (mode === "transcription" && audioMedia.length > 0) {
+      if (
+        !selectedAudioId ||
+        !audioMedia.some((m) => String(m.id) === String(selectedAudioId))
+      ) {
+        setSelectedAudioId(String(audioMedia[0].id))
+      }
+    }
+  }, [mode, audioMedia.length, selectedAudioId])
+
+  const activeAudioMedia =
+    audioMedia.find((x) => String(x.id) === String(selectedAudioId)) ||
+    audioMedia[0]
+
+  // Changement de fichier audio sélectionné : réinitialisation de la transcription pour éviter d'attribuer
+  // l'ancienne transcription au nouveau fichier (Règle 19)
+  const handleSelectAudio = (newId) => {
+    setSelectedAudioId(newId)
+    setTranscriptionText("")
+    setTranscriptionMeta(null)
+    setTranscriptionError(null)
+    setSaveTranscriptionError(null)
+    setNoSpeechDetected(false)
+  }
+
+  // Lancement de la transcription Whisper
+  const handleTranscribe = async () => {
+    if (!activeAudioMedia) {
+      notify("Veuillez sélectionner un fichier audio.", "error")
+      return
+    }
+
+    if (isTranscribing) return
+
+    setIsTranscribing(true)
+    setTranscriptionError(null)
+    setNoSpeechDetected(false)
+    setSaveTranscriptionError(null)
+
+    try {
+      const result = await mediaService.transcribeMedia(activeAudioMedia.id)
+      if (!isMountedRef.current) return
+
+      const text = result?.text || ""
+      setTranscriptionText(text)
+      setTranscriptionMeta({
+        language: result?.language || "unknown",
+        duration: result?.duration || 0,
+        model: result?.model || "base",
+      })
+
+      if (!text.trim()) {
+        setNoSpeechDetected(true)
+        notify("Aucune parole détectée dans cet enregistrement.", "info")
+      } else {
+        notify("Transcription réussie avec Whisper !")
+      }
+    } catch (err) {
+      if (!isMountedRef.current) return
+
+      let userMsg = ""
+      if (err.status === 422 || err.code === "no_speech_detected") {
+        setNoSpeechDetected(true)
+        setTranscriptionText("")
+        userMsg = "Aucune parole détectée dans cet enregistrement."
+      } else if (
+        err.status === 400 ||
+        err.code === "invalid_media_type" ||
+        err.code === "invalid_audio"
+      ) {
+        userMsg =
+          err.message || "Fichier audio non valide ou format non supporté."
+      } else if (err.status === 401) {
+        userMsg =
+          "Session expirée. Veuillez vous reconnecter pour transcrire un média."
+      } else if (err.status === 404 || err.code === "file_not_found") {
+        userMsg = "Fichier audio introuvable sur le serveur ou non accessible."
+      } else if (
+        err.status === 503 ||
+        err.code === "service_unavailable" ||
+        err.code === "service_busy"
+      ) {
+        userMsg =
+          err.message ||
+          "Le service de transcription Whisper est temporairement indisponible ou surchargé."
+      } else {
+        userMsg =
+          err.message || "Une erreur est survenue lors de la transcription."
+      }
+
+      setTranscriptionError(userMsg)
+      notify(userMsg, "error")
+    } finally {
+      if (isMountedRef.current) {
+        setIsTranscribing(false)
+      }
+    }
+  }
+
+  const handleOpenConfirmSave = () => {
+    if (!transcriptionText.trim()) {
+      notify("Aucun texte à enregistrer.", "error")
+      return
+    }
+    setSaveTranscriptionError(null)
+    setIsConfirmSaveModalOpen(true)
+  }
+
+  const handleCloseConfirmSave = () => {
+    if (isSavingTranscription) return
+    setIsConfirmSaveModalOpen(false)
+    setSaveTranscriptionError(null)
+  }
+
+  const handleConfirmSaveTranscription = async () => {
+    if (!activeAudioMedia) return
+    if (!transcriptionText.trim()) {
+      setSaveTranscriptionError(
+        "Le texte de transcription ne peut pas être vide.",
+      )
+      return
+    }
+
+    if (isSavingTranscription) return
+
+    setIsSavingTranscription(true)
+    setSaveTranscriptionError(null)
+
+    try {
+      const payload = {
+        description: transcriptionText.trim(),
+      }
+
+      const updated = await mediaService.updateMedia(
+        activeAudioMedia.id,
+        payload,
+      )
+      if (!isMountedRef.current) return
+
+      // Mise à jour de l'état local du store sans recharger toute la page
+      setMedia((previous) =>
+        previous.map((item) =>
+          String(item.id) === String(activeAudioMedia.id)
+            ? { ...item, ...updated }
+            : item,
+        ),
+      )
+
+      notify("Transcription enregistrée dans la description du média !")
+      setIsConfirmSaveModalOpen(false)
+    } catch (err) {
+      if (!isMountedRef.current) return
+      const msg =
+        err?.message || "Erreur lors de l'enregistrement de la description."
+      setSaveTranscriptionError(msg)
+      notify(msg, "error")
+    } finally {
+      if (isMountedRef.current) {
+        setIsSavingTranscription(false)
+      }
+    }
+  }
 
   // Recherche du média dans le store ou récupération via l'API en direct
   const storeItem = media.find((m) => String(m.id) === String(id))
@@ -161,8 +361,8 @@ export function MediaPage({ mode = "library" }) {
         previous.map((item) =>
           String(item.id) === String(currentMedia.id)
             ? { ...item, ...updated }
-            : item
-        )
+            : item,
+        ),
       )
 
       if (fetchedItem) {
@@ -204,9 +404,7 @@ export function MediaPage({ mode = "library" }) {
 
       // Retrait du média du store uniquement après succès confirmé par le backend
       setMedia((previous) =>
-        previous.filter(
-          (item) => String(item.id) !== String(currentMedia.id)
-        )
+        previous.filter((item) => String(item.id) !== String(currentMedia.id)),
       )
 
       notify("Média supprimé avec succès")
@@ -214,8 +412,7 @@ export function MediaPage({ mode = "library" }) {
       nav("/media")
     } catch (err) {
       // En cas d'erreur, le média est conservé dans l'affichage
-      const message =
-        err?.message || "Erreur lors de la suppression du média"
+      const message = err?.message || "Erreur lors de la suppression du média"
       setDeleteError(message)
       notify(message, "error")
     } finally {
@@ -244,7 +441,8 @@ export function MediaPage({ mode = "library" }) {
                   {selectedFile.name}
                 </b>
                 <p className="mt-1 text-xs text-slate-500">
-                  {(selectedFile.size / (1024 * 1024)).toFixed(2)} Mo · Cliquez pour changer de fichier
+                  {(selectedFile.size / (1024 * 1024)).toFixed(2)} Mo · Cliquez
+                  pour changer de fichier
                 </p>
               </div>
             ) : (
@@ -270,10 +468,17 @@ export function MediaPage({ mode = "library" }) {
                   }
                   const typeSelect = document.querySelector("#media-type")
                   if (typeSelect) {
-                    if (file.type.startsWith("image/")) typeSelect.value = "image"
-                    else if (file.type.startsWith("audio/")) typeSelect.value = "audio"
-                    else if (file.type.startsWith("video/")) typeSelect.value = "video"
-                    else if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) typeSelect.value = "document"
+                    if (file.type.startsWith("image/"))
+                      typeSelect.value = "image"
+                    else if (file.type.startsWith("audio/"))
+                      typeSelect.value = "audio"
+                    else if (file.type.startsWith("video/"))
+                      typeSelect.value = "video"
+                    else if (
+                      file.type === "application/pdf" ||
+                      file.name.toLowerCase().endsWith(".pdf")
+                    )
+                      typeSelect.value = "document"
                   }
                 }
               }}
@@ -346,7 +551,7 @@ export function MediaPage({ mode = "library" }) {
                 setIsUploading(false)
                 notify(
                   error?.message || "Erreur lors du téléversement",
-                  "error"
+                  "error",
                 )
               }
             }}
@@ -447,16 +652,14 @@ export function MediaPage({ mode = "library" }) {
               <Card key={x} className="p-4">
                 <img
                   src={
-                    media.filter((m) => m.url)[i]?.url ||
-                    media[0]?.url ||
-                    ""
+                    media.filter((m) => m.url)[i]?.url || media[0]?.url || ""
                   }
                   className="aspect-square w-full rounded-xl object-cover"
                   alt="Groupe de photos"
                   onError={(e) =>
                     handleImageError(
                       e,
-                      media.filter((m) => m.url)[i]?.url || media[0]?.url
+                      media.filter((m) => m.url)[i]?.url || media[0]?.url,
                     )
                   }
                 />
@@ -486,7 +689,7 @@ export function MediaPage({ mode = "library" }) {
                   )}
                 </div>
               </Card>
-            )
+            ),
           )}
         </div>
       </>
@@ -494,64 +697,318 @@ export function MediaPage({ mode = "library" }) {
   }
 
   // ==========================================
-  // MODE 4 : SIMULATION TRANSCRIPTION
+  // MODE 4 : TRANSCRIPTION AUDIO WHISPER (RÉELLE)
   // ==========================================
   if (mode === "transcription") {
-    const audioMedia = media.filter(
-      (x) => (x.media_type || x.type) === "audio"
-    )
+    if (mediaLoading && audioMedia.length === 0) {
+      return (
+        <div className="py-12 text-center">
+          <Loading label="Chargement de vos enregistrements audio..." />
+        </div>
+      )
+    }
 
     return (
       <>
         <PageHeader
-          title="Transcription audio"
-          subtitle="Service simulé en attente de l’intégration backend."
-        />
-        <div className="grid gap-6 lg:grid-cols-3">
-          <Card className="p-5">
-            <SectionTitle title="Enregistrement" />
-            <Select label="Fichier audio">
-              {audioMedia.length > 0 ? (
-                audioMedia.map((x) => (
-                  <option key={x.id} value={x.id}>
-                    {x.title}
-                  </option>
-                ))
-              ) : (
-                <option value="">Aucun fichier audio disponible</option>
-              )}
-            </Select>
-            <div className="mt-5 flex items-center gap-3 rounded-xl bg-slate-950 p-4 text-white">
-              <Button className="rounded-full! p-3!">
-                <Play size={17} />
+          title="Transcription audio Whisper"
+          subtitle="Transcription automatique sécurisée en local avec Whisper (modèle base, CPU int8)."
+          actions={
+            <Link to="/media/upload">
+              <Button variant="secondary">
+                <Upload size={16} /> Ajouter un audio
               </Button>
-              <div className="h-1.5 flex-1 rounded bg-white/20">
-                <div className="h-full w-1/3 bg-cyan-300" />
+            </Link>
+          }
+        />
+
+        {audioMedia.length === 0 ? (
+          <Empty
+            title="Aucun fichier audio disponible"
+            text="Vous n'avez pas encore téléversé d'enregistrement audio dans votre bibliothèque."
+            action={
+              <Link to="/media/upload">
+                <Button>
+                  <Upload size={16} /> Téléverser un fichier audio
+                </Button>
+              </Link>
+            }
+          />
+        ) : (
+          <div className="grid gap-6 lg:grid-cols-3">
+            {/* Colonne latérale : sélection du fichier et lecteur */}
+            <Card className="flex flex-col justify-between p-5">
+              <div>
+                <SectionTitle title="Enregistrement audio" />
+
+                <div className="mt-4">
+                  <Select
+                    label="Fichier audio sélectionné"
+                    value={selectedAudioId}
+                    onChange={(e) => handleSelectAudio(e.target.value)}
+                    disabled={isTranscribing || isSavingTranscription}
+                  >
+                    {audioMedia.map((x) => (
+                      <option key={x.id} value={x.id}>
+                        {x.title || "Enregistrement sans titre"}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+
+                {activeAudioMedia && (
+                  <div className="mt-4">
+                    <b className="block text-sm text-slate-900 truncate">
+                      {activeAudioMedia.title}
+                    </b>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {activeAudioMedia.created_at
+                        ? `Ajouté le ${new Date(activeAudioMedia.created_at).toLocaleDateString("fr-FR")}`
+                        : "Fichier audio"}
+                    </p>
+
+                    {/* Vrai lecteur HTML5 audio */}
+                    <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+                        <Music size={14} />
+                        <span>Écoute du fichier</span>
+                      </div>
+                      {activeAudioMedia.url ? (
+                        <audio
+                          key={activeAudioMedia.id}
+                          controls
+                          src={resolveAudioUrl(activeAudioMedia)}
+                          className="w-full"
+                          preload="metadata"
+                        >
+                          Votre navigateur ne supporte pas la lecture audio.
+                        </audio>
+                      ) : (
+                        <p className="text-xs text-slate-400">
+                          URL du fichier indisponible.
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Aperçu de la description actuelle */}
+                    {activeAudioMedia.description && (
+                      <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs">
+                        <span className="font-semibold text-slate-700 block mb-1">
+                          Description actuelle :
+                        </span>
+                        <p className="text-slate-600 line-clamp-3 italic">
+                          « {activeAudioMedia.description} »
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-              <span className="text-xs">0:34</span>
-            </div>
-          </Card>
-          <Card className="p-5 lg:col-span-2">
-            <Textarea
-              label="Transcription simulée"
-              rows={12}
-              defaultValue="Ce matin, j’ai réfléchi aux priorités de la semaine. Je veux terminer la présentation, prendre du temps pour lire et appeler ma famille."
-            />
-            <div className="mt-3 flex flex-wrap gap-2">
-              {["priorités", "présentation", "lecture", "famille"].map(
-                (item) => (
-                  <Badge key={item}>{item}</Badge>
-                )
-              )}
-            </div>
-            <Button
-              className="mt-5"
-              onClick={() => notify("Transcription enregistrée")}
-            >
-              <Save size={16} /> Enregistrer
-            </Button>
-          </Card>
-        </div>
+
+              {/* Bouton de déclenchement de la transcription Whisper */}
+              <div className="mt-5 border-t border-slate-100 pt-4">
+                <Button
+                  variant="ai"
+                  className="w-full"
+                  onClick={handleTranscribe}
+                  disabled={
+                    isTranscribing || isSavingTranscription || !activeAudioMedia
+                  }
+                >
+                  {isTranscribing ? (
+                    <>
+                      <LoaderCircle className="animate-spin" size={16} />
+                      Transcription en cours...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles size={16} />
+                      Transcrire avec Whisper
+                    </>
+                  )}
+                </Button>
+                <p className="mt-2 text-center text-xs text-slate-400">
+                  Traitement local sécurisé sur CPU int8
+                </p>
+              </div>
+            </Card>
+
+            {/* Colonne principale : Éditeur et résultat */}
+            <Card className="flex flex-col justify-between p-5 lg:col-span-2">
+              <div>
+                <div className="mb-3 flex items-center justify-between">
+                  <SectionTitle title="Transcription Whisper" />
+                  {isTranscribing && (
+                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-violet-600">
+                      <LoaderCircle className="animate-spin" size={14} />
+                      Analyse en cours...
+                    </span>
+                  )}
+                </div>
+
+                {/* État explicite de chargement */}
+                {isTranscribing && (
+                  <div className="mb-4 flex items-center gap-3 rounded-xl border border-violet-200 bg-violet-50 p-3.5 text-violet-800">
+                    <LoaderCircle
+                      className="animate-spin shrink-0 text-violet-600"
+                      size={20}
+                    />
+                    <div>
+                      <p className="text-sm font-semibold">
+                        Transcription Whisper en cours d’exécution
+                      </p>
+                      <p className="text-xs text-violet-600">
+                        Analyse audio locale par le modèle Whisper base.
+                        Veuillez patienter...
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Bannière d'erreur */}
+                {transcriptionError && (
+                  <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 p-3.5 text-sm text-red-700">
+                    <AlertCircle size={18} className="mt-0.5 shrink-0" />
+                    <div>
+                      <p className="font-semibold">Erreur de transcription</p>
+                      <p className="mt-0.5 text-xs text-red-600">
+                        {transcriptionError}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Notification aucune parole détectée */}
+                {noSpeechDetected && (
+                  <div className="mb-4 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                    <AlertCircle size={18} className="shrink-0" />
+                    <span>
+                      Aucune parole détectée dans cet enregistrement audio.
+                    </span>
+                  </div>
+                )}
+
+                {/* Zone de texte éditable */}
+                <Textarea
+                  label="Texte transcrit (zone éditable)"
+                  rows={10}
+                  value={transcriptionText}
+                  onChange={(e) => setTranscriptionText(e.target.value)}
+                  placeholder={
+                    isTranscribing
+                      ? "Transcription audio en cours par Whisper..."
+                      : "Le texte issu de la transcription Whisper apparaîtra ici. Cliquez sur « Transcrire avec Whisper » pour analyser l'enregistrement audio sélectionné."
+                  }
+                  disabled={isTranscribing}
+                />
+
+                {/* Métadonnées de l'inférence Whisper */}
+                {transcriptionMeta && (
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    {transcriptionMeta.language && (
+                      <Badge className="border border-emerald-200 bg-emerald-50 text-emerald-700">
+                        Langue : {transcriptionMeta.language.toUpperCase()}
+                      </Badge>
+                    )}
+                    {typeof transcriptionMeta.duration === "number" && (
+                      <Badge className="border border-blue-200 bg-blue-50 text-blue-700">
+                        Durée audio : {transcriptionMeta.duration.toFixed(1)}s
+                      </Badge>
+                    )}
+                    {transcriptionMeta.model && (
+                      <Badge className="border border-purple-200 bg-purple-50 text-purple-700">
+                        Modèle : Whisper {transcriptionMeta.model}
+                      </Badge>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Bouton d'enregistrement vers la description */}
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+                <Button
+                  onClick={handleOpenConfirmSave}
+                  disabled={
+                    !transcriptionText.trim() ||
+                    isTranscribing ||
+                    isSavingTranscription
+                  }
+                >
+                  <Save size={16} /> Enregistrer la transcription
+                </Button>
+                {transcriptionText.trim() ? (
+                  <span className="text-xs text-slate-500">
+                    {transcriptionText.trim().split(/\s+/).length} mots ·
+                    Cliquez sur Enregistrer pour mettre à jour la description
+                  </span>
+                ) : (
+                  <span className="text-xs text-slate-400">
+                    Aucune transcription à enregistrer
+                  </span>
+                )}
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {/* Modal de confirmation d'enregistrement */}
+        <Modal
+          open={isConfirmSaveModalOpen}
+          onClose={handleCloseConfirmSave}
+          title="Enregistrer la transcription"
+          actions={
+            <>
+              <Button
+                variant="secondary"
+                onClick={handleCloseConfirmSave}
+                disabled={isSavingTranscription}
+              >
+                Annuler
+              </Button>
+              <Button
+                onClick={handleConfirmSaveTranscription}
+                disabled={isSavingTranscription || !transcriptionText.trim()}
+              >
+                {isSavingTranscription
+                  ? "Enregistrement..."
+                  : "Confirmer et remplacer"}
+              </Button>
+            </>
+          }
+        >
+          <div className="space-y-3">
+            {saveTranscriptionError && (
+              <div className="flex items-center gap-2 rounded-xl bg-red-50 p-3 text-sm text-red-700">
+                <AlertCircle size={18} className="shrink-0" />
+                <span>{saveTranscriptionError}</span>
+              </div>
+            )}
+            <p className="text-sm text-slate-700">
+              Voulez-vous enregistrer cette transcription comme nouvelle
+              description du média{" "}
+              <b className="font-semibold text-slate-900">
+                « {activeAudioMedia?.title} »
+              </b>{" "}
+              ?
+            </p>
+            {activeAudioMedia?.description ? (
+              <div className="rounded-xl bg-amber-50 p-3 text-xs text-amber-800">
+                <span className="mb-1 block font-semibold">
+                  ⚠️ Attention : Cette action remplacera la description actuelle
+                  :
+                </span>
+                <p className="line-clamp-3 italic text-slate-700">
+                  « {activeAudioMedia.description} »
+                </p>
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500">
+                Cette transcription sera enregistrée dans les métadonnées de ce
+                fichier audio.
+              </p>
+            )}
+          </div>
+        </Modal>
       </>
     )
   }
@@ -745,7 +1202,9 @@ export function MediaPage({ mode = "library" }) {
                 onClick={handleConfirmDelete}
                 disabled={isDeleting}
               >
-                {isDeleting ? "Suppression en cours..." : "Confirmer la suppression"}
+                {isDeleting
+                  ? "Suppression en cours..."
+                  : "Confirmer la suppression"}
               </Button>
             </>
           }
@@ -765,8 +1224,8 @@ export function MediaPage({ mode = "library" }) {
               ?
             </p>
             <p className="text-xs text-slate-500">
-              Cette action est irréversible. Le fichier sera physiquement
-              effacé du serveur de stockage.
+              Cette action est irréversible. Le fichier sera physiquement effacé
+              du serveur de stockage.
             </p>
             <div className="rounded-xl bg-amber-50 p-3 text-xs text-amber-800">
               <span className="font-semibold">Remarque :</span> Si ce média est
@@ -783,9 +1242,7 @@ export function MediaPage({ mode = "library" }) {
   // MODE 6 : BIBLIOTHÈQUE MULTIMÉDIA (LISTE)
   // ==========================================
   const list = media.filter((x) => {
-    const titleMatch = (x.title || "")
-      .toLowerCase()
-      .includes(q.toLowerCase())
+    const titleMatch = (x.title || "").toLowerCase().includes(q.toLowerCase())
     const descMatch = (x.description || "")
       .toLowerCase()
       .includes(q.toLowerCase())

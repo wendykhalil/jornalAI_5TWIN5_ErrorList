@@ -590,11 +590,13 @@ class MediaTranscriptionAPITest(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.data["code"], "invalid_media_type")
 
+    @patch.dict("sys.modules", {"faster_whisper": None})
     def test_transcribe_missing_package_returns_503(self):
         """
         Test that when faster_whisper is not installed in the environment,
         the endpoint returns HTTP 503 Service Unavailable with a clean message.
         """
+        AudioTranscriptionService.reset_model()
         response = self.client.post(f"/api/media/{self.audio_media.id}/transcribe/")
         self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
         self.assertEqual(response.data["code"], "service_unavailable")

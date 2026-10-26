@@ -1,8 +1,7 @@
 import authService from "./authService"
 
 const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ||
-  "http://localhost:8000/api"
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api"
 
 const MEDIA_URL = `${API_BASE_URL}/media/`
 
@@ -14,12 +13,14 @@ function errorMessage(data, fallback) {
     return data.detail
   }
 
+  if (typeof data?.error === "string") {
+    return data.error
+  }
+
   if (data && typeof data === "object") {
     return Object.entries(data)
       .map(([field, value]) => {
-        const message = Array.isArray(value)
-          ? value.join(", ")
-          : String(value)
+        const message = Array.isArray(value) ? value.join(", ") : String(value)
 
         return `${field}: ${message}`
       })
@@ -32,25 +33,16 @@ function errorMessage(data, fallback) {
 /**
  * Authenticated API request for media
  */
-async function mediaRequest(
-  endpoint = "",
-  options = {},
-  retry = true
-) {
+async function mediaRequest(endpoint = "", options = {}, retry = true) {
   const { accessToken } = authService.getTokens()
 
-  const response = await fetch(
-    `${MEDIA_URL}${endpoint}`,
-    {
-      ...options,
-      headers: {
-        ...options.headers,
-        ...(accessToken
-          ? { Authorization: `Bearer ${accessToken}` }
-          : {}),
-      },
-    }
-  )
+  const response = await fetch(`${MEDIA_URL}${endpoint}`, {
+    ...options,
+    headers: {
+      ...options.headers,
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    },
+  })
 
   if (response.status === 401 && retry) {
     const refreshed = await authService.refreshAccessToken()
@@ -65,9 +57,11 @@ async function mediaRequest(
   if (!response.ok) {
     const data = await response.json().catch(() => ({}))
 
-    throw new Error(
-      errorMessage(data, `Erreur HTTP ${response.status}`)
-    )
+    const err = new Error(errorMessage(data, `Erreur HTTP ${response.status}`))
+    err.status = response.status
+    err.code = data?.code
+    err.data = data
+    throw err
   }
 
   if (response.status === 204) {
@@ -140,6 +134,16 @@ export const mediaService = {
   deleteMedia: (id) => {
     return mediaRequest(`${encodeURIComponent(id)}/`, {
       method: "DELETE",
+    })
+  },
+
+  /**
+   * Transcribe audio media using Whisper
+   * @param {string|number} id - Media ID
+   */
+  transcribeMedia: (id) => {
+    return mediaRequest(`${encodeURIComponent(id)}/transcribe/`, {
+      method: "POST",
     })
   },
 }
