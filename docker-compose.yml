@@ -116,6 +116,8 @@ volumes:
     name: jornal_ssl_certs
   certbot_www:
     name: jornal_certbot_www
+  certbot_etc:
+    name: jornal_certbot_etc
 
 networks:
   jornal_net:

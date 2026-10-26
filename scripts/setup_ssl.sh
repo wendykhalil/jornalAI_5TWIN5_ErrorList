@@ -5,59 +5,111 @@ set -e
 # Setup Official Let's Encrypt TLS Certificate for Jornal AI / MindLog AI
 # Uses the Certbot HTTP-01 challenge against the running Nginx container.
 #
-# Prerequisite:
-# A valid FQDN (e.g. mindlog.francecentral.cloudapp.azure.com or your domain)
-# pointing to 20.240.53.98.
-# (Note: Let's Encrypt does not issue certificates for bare IP addresses).
+# Production domain: mindlog-ai.swedencentral.cloudapp.azure.com
+# Target Azure VM IP: 20.240.53.98
 # ==============================================================================
 
-if [ -z "$1" ] || [ -z "$2" ]; then
-  echo "Usage: $0 <domain-name> <admin-email>"
+DEFAULT_DOMAIN="mindlog-ai.swedencentral.cloudapp.azure.com"
+
+# Argument parsing:
+# Usage:
+#   sudo bash scripts/setup_ssl.sh <admin-email>
+#   sudo bash scripts/setup_ssl.sh <domain-name> <admin-email>
+if [ -z "$1" ]; then
+  echo "Usage: $0 [domain-name] <admin-email> OR $0 <admin-email>"
+  echo "Example: $0 admin@mindlog.ai"
   echo "Example: $0 mindlog-ai.swedencentral.cloudapp.azure.com admin@mindlog.ai"
-  echo ""
-  echo "Tip: For Azure VM (IP: 20.240.53.98), configure an Azure DNS name label:"
-  echo "az network public-ip update --resource-group <rg> --name <ip-name> --dns-name <label>"
   exit 1
 fi
 
-DOMAIN="$1"
-EMAIL="$2"
-CERTBOT_DIR="./certbot"
+if [[ "$1" == *"@"* ]] && [ -z "$2" ]; then
+  DOMAIN="${DEFAULT_DOMAIN}"
+  EMAIL="$1"
+else
+  DOMAIN="$1"
+  EMAIL="${2:-admin@mindlog.ai}"
+fi
 
-echo "=== Requesting Let's Encrypt TLS Certificate for ${DOMAIN} ==="
+echo "================================================================="
+echo "Requesting Let's Encrypt TLS Certificate"
+echo "Domain: ${DOMAIN}"
+echo "Email : ${EMAIL}"
+echo "================================================================="
 
-# Check that frontend container is running
-if ! docker ps --format '{{.Names}}' | grep -q "^jornal_frontend$"; then
-  echo "Error: Container 'jornal_frontend' is not running."
-  echo "Please start the stack first using: docker compose up -d"
+# Check that Docker is available
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Error: 'docker' command not found. Please ensure Docker is installed and in PATH." >&2
   exit 1
 fi
 
-# Run Certbot container using webroot challenge through shared volume
-docker run -it --rm \
-  -v jornal_certbot_www:/var/www/certbot \
-  -v jornal_ssl_certs:/etc/letsencrypt/live \
-  -v certbot_etc:/etc/letsencrypt \
+# Determine frontend container name (defaults to jornal_frontend)
+CONTAINER_NAME="jornal_frontend"
+if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+  echo "Error: Container '${CONTAINER_NAME}' is not running." >&2
+  echo "Please start the production stack first using: docker compose up -d" >&2
+  exit 1
+fi
+
+# Detect TTY for docker run (safe for automated/sudo/SSH non-interactive execution)
+DOCKER_FLAGS="--rm"
+if [ -t 0 ] && [ -t 1 ]; then
+  DOCKER_FLAGS="${DOCKER_FLAGS} -it"
+else
+  DOCKER_FLAGS="${DOCKER_FLAGS} -i"
+fi
+
+# Named volumes shared with docker-compose:
+# - jornal_certbot_www: Webroot for HTTP-01 ACME challenge
+# - jornal_certbot_etc: Certbot configuration, keys, and renewal records
+# - jornal_ssl_certs: Nginx active certificate directory (/etc/nginx/ssl/live)
+WEBROOT_VOL="jornal_certbot_www"
+CERTBOT_ETC_VOL="jornal_certbot_etc"
+NGINX_SSL_VOL="jornal_ssl_certs"
+
+echo "1/3 Requesting certificate via Certbot HTTP-01 webroot challenge..."
+# NOTE: We mount ONLY webroot and certbot_etc.
+# No overlapping mounts into /etc/letsencrypt/live to avoid breaking Certbot's symlinks.
+# Using --keep-until-expiring prevents burning Let's Encrypt rate limits on re-runs.
+docker run ${DOCKER_FLAGS} \
+  -v "${WEBROOT_VOL}:/var/www/certbot" \
+  -v "${CERTBOT_ETC_VOL}:/etc/letsencrypt" \
   certbot/certbot certonly \
   --webroot \
   --webroot-path=/var/www/certbot \
   --email "${EMAIL}" \
   --agree-tos \
   --no-eff-email \
-  --force-renewal \
+  --keep-until-expiring \
+  --non-interactive \
   -d "${DOMAIN}"
 
-# Copy the newly issued cert files to the live volume location expected by Nginx
+echo "2/3 Copying validated certificates into Nginx active volume..."
+# We use cp -L (dereference) to copy the actual certificate files rather than relative symlinks,
+# ensuring Nginx can read them directly without requiring the full /etc/letsencrypt directory.
 docker run --rm \
-  -v jornal_ssl_certs:/etc/nginx/ssl/live \
-  -v certbot_etc:/etc/letsencrypt \
+  -v "${NGINX_SSL_VOL}:/etc/nginx/ssl/live" \
+  -v "${CERTBOT_ETC_VOL}:/etc/letsencrypt" \
   alpine sh -c "
-    cp /etc/letsencrypt/live/${DOMAIN}/fullchain.pem /etc/nginx/ssl/live/fullchain.pem &&
-    cp /etc/letsencrypt/live/${DOMAIN}/privkey.pem /etc/nginx/ssl/live/privkey.pem &&
+    if [ ! -f /etc/letsencrypt/live/${DOMAIN}/fullchain.pem ] || [ ! -f /etc/letsencrypt/live/${DOMAIN}/privkey.pem ]; then
+      echo 'Error: Certificate files not found in /etc/letsencrypt/live/${DOMAIN}/' >&2
+      exit 1
+    fi
+    cp -L /etc/letsencrypt/live/${DOMAIN}/fullchain.pem /etc/nginx/ssl/live/fullchain.pem
+    cp -L /etc/letsencrypt/live/${DOMAIN}/privkey.pem /etc/nginx/ssl/live/privkey.pem
+    chmod 644 /etc/nginx/ssl/live/fullchain.pem
     chmod 600 /etc/nginx/ssl/live/privkey.pem
+    echo 'Certificates successfully updated in Nginx live volume.'
   "
 
-echo "Reloading Nginx with new certificate..."
-docker compose exec frontend nginx -s reload
+echo "3/3 Reloading Nginx with new certificate..."
+if docker exec "${CONTAINER_NAME}" nginx -s reload; then
+  echo "Nginx successfully reloaded!"
+else
+  echo "Fallback: Reloading via docker compose exec..."
+  docker compose exec -T frontend nginx -s reload
+fi
 
-echo "=== Success! Official Let's Encrypt TLS certificate active for https://${DOMAIN} ==="
+echo "================================================================="
+echo "SUCCESS! Official Let's Encrypt certificate active for:"
+echo "https://${DOMAIN}"
+echo "================================================================="

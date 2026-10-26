@@ -21,8 +21,9 @@ if [ ! -f "$SSL_DIR/fullchain.pem" ] || [ ! -f "$SSL_DIR/privkey.pem" ]; then
     echo "Bootstrap certificate ready."
 fi
 
-# Ensure certbot webroot directory exists
+# Ensure certbot webroot directory exists with correct permissions
 mkdir -p /var/www/certbot
+chmod 755 /var/www/certbot
 
 echo "Starting Nginx on ports 80 (HTTP redirect) and 443 (HTTPS)..."
 exec nginx -g "daemon off;"
