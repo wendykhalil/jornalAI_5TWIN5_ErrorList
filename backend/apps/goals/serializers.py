@@ -2,11 +2,14 @@ from datetime import date
 
 from rest_framework import serializers
 
-from .models import Goal, Habit, HabitCheck
+from .models import Goal, GoalProgress, GoalStep, Habit, HabitCheck
 
 
 class GoalSerializer(serializers.ModelSerializer):
     """Serializer for Goal with validation of progress and dates."""
+
+    steps_total = serializers.SerializerMethodField()
+    steps_done = serializers.SerializerMethodField()
 
     class Meta:
         model = Goal
@@ -20,6 +23,8 @@ class GoalSerializer(serializers.ModelSerializer):
             "progress",
             "created_at",
             "updated_at",
+            "steps_total",
+            "steps_done",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
 
@@ -44,6 +49,59 @@ class GoalSerializer(serializers.ModelSerializer):
                 {"end_date": "End date cannot be before the start date."}
             )
         return attrs
+
+    def get_steps_total(self, obj):
+        return obj.steps.count()
+
+    def get_steps_done(self, obj):
+        return obj.steps.filter(done=True).count()
+
+
+class GoalProgressSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GoalProgress
+        fields = ["id", "progress", "created_at"]
+
+
+class GoalStepSerializer(serializers.ModelSerializer):
+    goal_progress = serializers.SerializerMethodField()
+    goal_status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GoalStep
+        fields = [
+            "id",
+            "goal",
+            "title",
+            "done",
+            "order",
+            "due_date",
+            "created_at",
+            "updated_at",
+            "goal_progress",
+            "goal_status",
+        ]
+        read_only_fields = [
+            "id",
+            "goal",
+            "order",
+            "created_at",
+            "updated_at",
+            "goal_progress",
+            "goal_status",
+        ]
+
+    def validate_title(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Title cannot be empty.")
+        return value
+
+    def get_goal_progress(self, obj):
+        return obj.goal.progress
+
+    def get_goal_status(self, obj):
+        return obj.goal.status
 
 
 class HabitCheckSerializer(serializers.ModelSerializer):

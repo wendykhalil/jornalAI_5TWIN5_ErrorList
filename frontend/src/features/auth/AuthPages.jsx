@@ -468,7 +468,8 @@ export function Onboarding() {
   )
 }
 export function AdminLogin() {
-  const { user: storeUser } = useStore()
+  const { login, logout } = useStore()
+  const navigate = useNavigate()
   const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [loading, setLoading] = useState(false)
@@ -480,12 +481,9 @@ export function AdminLogin() {
     setLoading(true)
 
     try {
-      await login(username.trim(), password)
+      const result = await login(username.trim(), password)
 
-      // AppStore.login() has completed and updated user state.
-      // Verify the logged-in user is an admin.
-      if (storeUser?.role !== "admin") {
-        // Not an admin. Log out and show error.
+      if (result?.user?.role !== "admin") {
         await logout()
         setError("Accès réservé aux administrateurs.")
         return

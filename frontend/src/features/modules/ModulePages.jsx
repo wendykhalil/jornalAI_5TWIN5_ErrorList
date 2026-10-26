@@ -39,6 +39,7 @@ import {
 import {
   AreaChart,
   Area,
+  CartesianGrid,
   ResponsiveContainer,
   XAxis,
   YAxis,
@@ -981,6 +982,66 @@ function formatAverage(value) {
   return `${Number(value).toLocaleString("fr-FR", { maximumFractionDigits: 1 })}/5`
 }
 
+function dominantMood(stats) {
+  const top = stats?.distribution?.[0]
+  if (!top || !stats?.count) return null
+  return top
+}
+
+function intensityShift(points) {
+  if (!Array.isArray(points) || points.length < 2) return null
+  const first = Number(points[0].intensity)
+  const last = Number(points[points.length - 1].intensity)
+  if (!Number.isFinite(first) || !Number.isFinite(last)) return null
+  const delta = last - first
+  if (delta === 0) return { value: "Stable", hint: "Même intensité qu'au premier point affiché" }
+  if (delta > 0) return { value: `+${delta}`, hint: "Plus élevée qu'au premier point affiché" }
+  return { value: String(delta), hint: "Plus basse qu'au premier point affiché" }
+}
+
+function MoodMetric({ icon: Icon, label, value, hint, tone }) {
+  return (
+    <div className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-sm font-medium text-stone-500">{label}</p>
+        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-stone-50 text-stone-600" aria-hidden="true">
+          <Icon size={16} />
+        </span>
+      </div>
+      <p className="mt-3 flex items-center gap-2 text-2xl font-semibold tracking-tight text-stone-950">
+        {tone ? <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: tone }} aria-hidden="true" /> : null}
+        <span className="min-w-0 truncate">{value}</span>
+      </p>
+      {hint ? <p className="mt-1 text-xs leading-5 text-stone-500">{hint}</p> : null}
+    </div>
+  )
+}
+
+function MoodIntensityMeter({ value }) {
+  const level = Number(value) || 0
+  return (
+    <div className="flex items-center gap-1.5" aria-label={`Intensité ${level} sur 5`}>
+      {[1, 2, 3, 4, 5].map((step) => (
+        <span
+          key={step}
+          className={`h-1.5 w-6 rounded-full ${step <= level ? "bg-teal-800" : "bg-stone-200"}`}
+        />
+      ))}
+    </div>
+  )
+}
+
+function MoodChartTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null
+  const point = payload[0]?.payload || {}
+  return (
+    <div className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm shadow-sm">
+      <p className="font-medium text-stone-800">{label}</p>
+      <p className="text-stone-600">{point.mood || "Intensité"} · {payload[0].value}/5</p>
+    </div>
+  )
+}
+
 function moodQuery(period, moodType, dateFrom, dateTo) {
   const params = {}
   if (moodType) params.mood = moodType
@@ -1000,29 +1061,206 @@ function listItems(response) {
 
 function MoodFilters({ moodType, setMoodType, period, setPeriod, dateFrom, setDateFrom, dateTo, setDateTo }) {
   return (
-    <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      <Select label="Humeur" value={moodType} onChange={(e) => setMoodType(e.target.value)}>
-        <option value="">Toutes les humeurs</option>
-        {Object.keys(moodColors).map((x) => <option key={x} value={x}>{x}</option>)}
-      </Select>
-      <Select label="Période" value={period} onChange={(e) => setPeriod(e.target.value)}>
-        <option value="all">Toutes les dates</option>
-        <option value="today">Aujourd’hui</option>
-        <option value="week">Cette semaine</option>
-        <option value="month">Ce mois</option>
-        <option value="custom">Période personnalisée</option>
-      </Select>
-      {period === "custom" && (
-        <>
-          <Input label="Du" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-          <Input label="Au" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-        </>
+    <div className="mb-5 rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+      <p className="mb-3 text-sm font-medium text-stone-700">Filtrer les check-ins</p>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Select label="Humeur" value={moodType} onChange={(e) => setMoodType(e.target.value)}>
+          <option value="">Toutes les humeurs</option>
+          {Object.keys(moodColors).map((x) => <option key={x} value={x}>{x}</option>)}
+        </Select>
+        <Select label="Période" value={period} onChange={(e) => setPeriod(e.target.value)}>
+          <option value="all">Toutes les dates</option>
+          <option value="today">Aujourd’hui</option>
+          <option value="week">Cette semaine</option>
+          <option value="month">Ce mois</option>
+          <option value="custom">Période personnalisée</option>
+        </Select>
+        {period === "custom" && (
+          <>
+            <Input label="Du" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <Input label="Au" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function formatFileSize(size) {
+  if (size < 1024) return `${size} o`
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)} Ko`
+  return `${(size / (1024 * 1024)).toFixed(1)} Mo`
+}
+
+function MoodOcrImport({ onUse }) {
+  const [file, setFile] = useState(null)
+  const [preview, setPreview] = useState("")
+  const [phase, setPhase] = useState("idle")
+  const [draft, setDraft] = useState("")
+  const [message, setMessage] = useState("")
+  const [confirmed, setConfirmed] = useState(false)
+
+  useEffect(() => {
+    if (!file || !String(file.type || "").startsWith("image/")) {
+      setPreview("")
+      return undefined
+    }
+    const url = URL.createObjectURL(file)
+    setPreview(url)
+    return () => URL.revokeObjectURL(url)
+  }, [file])
+
+  const choose = (event) => {
+    const next = event.target.files && event.target.files[0]
+    event.target.value = ""
+    setConfirmed(false)
+    setDraft("")
+    setMessage("")
+    if (!next) {
+      setFile(null)
+      setPhase("idle")
+      return
+    }
+    const name = next.name.toLowerCase()
+    const allowedName = [".png", ".jpg", ".jpeg", ".webp", ".pdf"].some((ext) => name.endsWith(ext))
+    const allowedType = ["image/png", "image/jpeg", "image/webp", "application/pdf"].includes(next.type)
+    if (!allowedName && !allowedType) {
+      setFile(next)
+      setPhase("invalid")
+      setMessage("Format non pris en charge. Utilisez une image PNG, JPEG, WEBP ou un PDF.")
+      return
+    }
+    if (!next.size) {
+      setFile(next)
+      setPhase("invalid")
+      setMessage("Le fichier est vide.")
+      return
+    }
+    if (next.size > 5 * 1024 * 1024) {
+      setFile(next)
+      setPhase("too-big")
+      setMessage("Le fichier dépasse la limite de 5 Mo.")
+      return
+    }
+    setFile(next)
+    setPhase("selected")
+  }
+
+  const extract = async () => {
+    if (!file || phase === "extracting") return
+    setPhase("extracting")
+    setMessage("")
+    setConfirmed(false)
+    try {
+      const result = await moodService.extractOcr(file)
+      if (result.status === "success") {
+        setDraft(result.text || "")
+        setPhase("ready")
+        setMessage(result.message || "")
+        return
+      }
+      setDraft("")
+      if (result.status === "unavailable") {
+        setPhase("unavailable")
+        setMessage(result.message || "L'OCR est indisponible.")
+        return
+      }
+      if (result.status === "no_text") {
+        setPhase("empty-text")
+        setMessage(result.message || "Aucun texte exploitable n'a été trouvé.")
+        return
+      }
+      setPhase("error")
+      setMessage(result.message || "L'extraction n'a pas abouti.")
+    } catch (err) {
+      const text = err.message || "Extraction impossible."
+      if (/vide/i.test(text)) setPhase("invalid")
+      else if (/limite|volumineux/i.test(text)) setPhase("too-big")
+      else if (/format|illisible|endommag|pris en charge/i.test(text)) setPhase("invalid")
+      else setPhase("error")
+      setMessage(text)
+    }
+  }
+
+  const useText = () => {
+    const text = draft.trim()
+    if (!text) {
+      setMessage("Le texte est vide. Corrigez-le ou relancez l'extraction.")
+      return
+    }
+    if (text.length > 2000) {
+      setMessage("La note ne peut pas dépasser 2000 caractères. Raccourcissez le texte.")
+      return
+    }
+    onUse(text)
+    setConfirmed(true)
+    setMessage("")
+  }
+
+  return (
+    <div className="mt-8 rounded-2xl border border-dashed border-stone-300 bg-stone-50/80 p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Importer un document</p>
+      <label htmlFor="mood-ocr-file" className="mt-1 block text-sm font-semibold text-stone-800">
+        Image ou PDF
+      </label>
+      <p className="mt-1 text-sm leading-6 text-stone-500">
+        1. Choisir un fichier. 2. Extraire le texte. 3. Le corriger. 4. Confirmer pour le placer dans la note. L'humeur et l'intensité ne changent pas.
+      </p>
+      <input
+        id="mood-ocr-file"
+        type="file"
+        accept=".png,.jpg,.jpeg,.webp,.pdf,image/png,image/jpeg,image/webp,application/pdf"
+        onChange={choose}
+        className="mt-3 block w-full text-sm text-stone-600 file:mr-3 file:min-h-11 file:rounded-xl file:border-0 file:bg-white file:px-3 file:py-2 file:font-semibold file:text-stone-700"
+      />
+      {file && (
+        <p className="mt-3 text-sm text-stone-600">
+          {file.name} · {formatFileSize(file.size)}
+        </p>
+      )}
+      {preview && (
+        <img src={preview} alt="Aperçu du document importé" className="mt-3 max-h-40 rounded-xl border border-stone-200 bg-white" />
+      )}
+      {file && phase !== "invalid" && phase !== "too-big" && (
+        <div className="mt-3">
+          <Button type="button" variant="secondary" disabled={phase === "extracting"} onClick={extract}>
+            {phase === "extracting" ? "Extraction..." : phase === "ready" || phase === "empty-text" ? "Extraire à nouveau" : "Extraire le texte"}
+          </Button>
+        </div>
+      )}
+      {phase === "extracting" && (
+        <div className="mt-3"><Loading label="Extraction du texte..." /></div>
+      )}
+      {message && (
+        <p role="alert" className={`mt-3 text-sm ${phase === "ready" ? "text-stone-500" : "text-red-700"}`}>{message}</p>
+      )}
+      {phase === "ready" && (
+        <div className="mt-4 rounded-xl border border-stone-200 bg-white p-3">
+          <Textarea
+            label="Texte reconnu, à corriger avant confirmation"
+            value={draft}
+            onChange={(event) => {
+              setDraft(event.target.value)
+              setConfirmed(false)
+            }}
+          />
+          <div className="mt-3">
+            <Button type="button" onClick={useText}>
+              Utiliser ce texte dans ma note
+            </Button>
+          </div>
+        </div>
+      )}
+      {confirmed && (
+        <p className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+          Texte inséré dans la note. Il sera enregistré lorsque vous validerez le formulaire.
+        </p>
       )}
     </div>
   )
 }
 
-function MoodForm({ initial, busy, error, title, subtitle, submitLabel, onSubmit }) {
+function MoodForm({ initial, busy, error, title, subtitle, submitLabel, cancelTo = "/mood", onSubmit }) {
   const [form, setForm] = useState(initial)
   const [localError, setLocalError] = useState("")
   const submit = (e) => {
@@ -1032,6 +1270,10 @@ function MoodForm({ initial, busy, error, title, subtitle, submitLabel, onSubmit
       setLocalError("La date ne peut pas être dans le futur.")
       return
     }
+    if (form.note.trim().length > 2000) {
+      setLocalError("La note ne peut pas dépasser 2000 caractères.")
+      return
+    }
     onSubmit({
       mood: form.mood,
       intensity: Number(form.intensity),
@@ -1039,60 +1281,176 @@ function MoodForm({ initial, busy, error, title, subtitle, submitLabel, onSubmit
       date: toApiDateTime(form.date),
     })
   }
+  const dateError = /date|futur/i.test(localError) ? localError : ""
+  const noteError = /note|2000/i.test(localError) ? localError : ""
+  const otherError = !dateError && !noteError ? localError : ""
   return (
     <>
-      <PageHeader title={title} subtitle={subtitle} />
-      <Card className="mx-auto max-w-3xl p-6">
+      <PageHeader eyebrow="Humeurs" title={title} subtitle={subtitle} />
+      <Card className="mx-auto max-w-3xl border-stone-200 p-5 shadow-sm sm:p-6">
         <form onSubmit={submit}>
-          <div className="grid grid-cols-3 gap-3 sm:grid-cols-5">
-            {Object.keys(moodColors).map((x) => (
-              <button
-                key={x}
-                type="button"
-                onClick={() => setForm({ ...form, mood: x })}
-                className={`rounded-2xl border p-4 text-center text-sm font-bold ${
-                  form.mood === x
-                    ? "border-violet-500 bg-violet-50 text-violet-700"
-                    : "border-slate-200"
-                }`}
-              >
-                <Smile className="mx-auto mb-2" style={{ color: moodColors[x] }} />
-                {x}
-              </button>
-            ))}
+          <fieldset>
+            <legend className="text-sm font-semibold text-stone-800">Humeur</legend>
+            <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {Object.keys(moodColors).map((x) => {
+                const selected = form.mood === x
+                return (
+                  <button
+                    key={x}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => setForm({ ...form, mood: x })}
+                    className={`min-h-16 rounded-2xl border px-3 py-3 text-left text-sm font-semibold motion-safe:transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-800 ${
+                      selected
+                        ? "border-teal-800 bg-teal-50 text-teal-950"
+                        : "border-stone-200 bg-white text-stone-700 hover:border-stone-300"
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className="size-2.5 rounded-full" style={{ backgroundColor: moodColors[x] }} aria-hidden="true" />
+                      {x}
+                    </span>
+                    <span className="mt-1 block text-xs font-medium text-stone-500">{selected ? "Choisie" : "Choisir"}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </fieldset>
+          <div className="mt-7" role="group" aria-label="Intensité de 1 à 5">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="text-sm font-semibold text-stone-800">Intensité</span>
+              <span className="text-sm text-stone-500">{form.intensity} sur 5</span>
+            </div>
+            <div className="mt-3 grid grid-cols-5 gap-2">
+              {[1, 2, 3, 4, 5].map((step) => (
+                <button
+                  key={step}
+                  type="button"
+                  aria-pressed={Number(form.intensity) === step}
+                  onClick={() => setForm({ ...form, intensity: step })}
+                  className={`min-h-11 rounded-xl border text-sm font-semibold motion-safe:transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-800 ${
+                    Number(form.intensity) === step
+                      ? "border-teal-800 bg-teal-800 text-white"
+                      : "border-stone-200 bg-white text-stone-700 hover:border-stone-300"
+                  }`}
+                >
+                  {step}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 flex justify-between text-xs text-stone-500"><span>Plus douce</span><span>Plus forte</span></p>
           </div>
-          <div className="mt-7">
-            <label className="text-sm font-bold">Intensité : {form.intensity}/5</label>
-            <input
-              type="range"
-              min="1"
-              max="5"
-              value={form.intensity}
-              onChange={(e) => setForm({ ...form, intensity: +e.target.value })}
-              className="mt-3 w-full accent-violet-600"
+          <MoodOcrImport onUse={(text) => setForm((current) => ({ ...current, note: text }))} />
+          <div className="mt-6">
+            <Textarea
+              label="Note personnelle, facultative"
+              value={form.note}
+              error={noteError}
+              onChange={(e) => setForm({ ...form, note: e.target.value })}
             />
           </div>
-          <Textarea
-            label="Une note (facultatif)"
-            value={form.note}
-            onChange={(e) => setForm({ ...form, note: e.target.value })}
-          />
           <Input
             className="mt-4"
             label="Date"
             type="date"
             value={form.date}
+            error={dateError}
             onChange={(e) => setForm({ ...form, date: e.target.value })}
           />
-          {(localError || error) && (
-            <p className="mt-4 text-sm text-red-600" role="alert">{localError || error}</p>
+          {(otherError || error) && (
+            <p className="mt-4 text-sm text-red-700" role="alert">{otherError || error}</p>
           )}
-          <Button className="mt-6" disabled={busy}>
-            {busy ? "Enregistrement..." : submitLabel}
-          </Button>
+          <div className="mt-6 flex flex-wrap gap-2">
+            <Button disabled={busy}>
+              {busy ? "Enregistrement..." : submitLabel}
+            </Button>
+            <Link to={cancelTo} className="inline-flex min-h-11 items-center justify-center rounded-xl border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-700 hover:bg-stone-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-800">
+              Annuler
+            </Link>
+          </div>
         </form>
       </Card>
     </>
+  )
+}
+
+function MoodNoteAnalysisCard({ detail, busy, notice, onAnalyze }) {
+  const analysis = detail.note_analysis
+  const hasNote = Boolean(detail.note && detail.note.trim())
+  const stale = analysis?.status === "stale"
+  const visible = analysis && (analysis.status === "available" || stale)
+  return (
+    <section className="rounded-2xl border border-teal-100 bg-teal-50/40 p-5" aria-label="Analyse de la note">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-stone-950">Analyse de la note</h2>
+          <p className="mt-1 max-w-xl text-sm leading-6 text-stone-600">
+            Interprétation du texte enregistré. Elle ne remplace ni l'humeur ni l'intensité que vous avez déclarées.
+          </p>
+        </div>
+        {visible && (
+          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${stale ? "bg-amber-100 text-amber-900" : "bg-white text-teal-900"}`}>
+            {stale ? "Périmée" : "À jour"}
+          </span>
+        )}
+      </div>
+      {!hasNote && (
+        <p className="mt-4 text-sm text-stone-500">Ajoutez une note pour lancer l'analyse.</p>
+      )}
+      {hasNote && (
+        <div className="mt-4">
+          <Button variant="ai" disabled={busy} onClick={() => onAnalyze(stale || analysis?.status === "available")}>
+            <Sparkles size={16} />
+            {busy ? "Analyse..." : stale || analysis ? "Relancer l'analyse" : "Analyser la note"}
+          </Button>
+        </div>
+      )}
+      {busy && <div className="mt-4"><Loading label="Le modèle local lit la note..." /></div>}
+      {notice && <p role="alert" className="mt-4 text-sm text-red-700">{notice}</p>}
+      {stale && (
+        <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          Cette analyse ne correspond plus à la note actuelle. Le contenu ci-dessous est l'ancienne lecture.
+        </p>
+      )}
+      {visible && (
+        <div className={`mt-4 space-y-4 text-sm text-stone-700 ${stale ? "opacity-80" : ""}`}>
+          <div>
+            <h3 className="font-semibold text-stone-950">Résumé</h3>
+            <p className="mt-1 leading-6">{analysis.summary}</p>
+          </div>
+          <div>
+            <h3 className="font-semibold text-stone-950">Émotions secondaires</h3>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {analysis.emotions_secondary.map((item) => (
+                <Badge key={item}>{item}</Badge>
+              ))}
+            </div>
+          </div>
+          <div>
+            <h3 className="font-semibold text-stone-950">Thèmes</h3>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {analysis.themes.map((item) => (
+                <Badge key={item} className="bg-white text-teal-900">{item}</Badge>
+              ))}
+            </div>
+          </div>
+          <div>
+            <h3 className="font-semibold text-stone-950">Extraits de votre note</h3>
+            <ul className="mt-2 space-y-2">
+              {analysis.evidence.map((item) => (
+                <li key={item} className="rounded-xl bg-white p-3 leading-6">« {item} »</li>
+              ))}
+            </ul>
+          </div>
+          {analysis.limitations ? (
+            <div>
+              <h3 className="font-semibold text-stone-950">Limites</h3>
+              <p className="mt-1 leading-6 text-stone-500">{analysis.limitations}</p>
+            </div>
+          ) : null}
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -1115,6 +1473,176 @@ function MoodDeleteModal({ item, busy, onClose, onConfirm }) {
         ? `Cette action supprimera définitivement « ${item.mood} » du ${formatMoodDate(item.date)}.`
         : null}
     </Modal>
+  )
+}
+
+function MoodAssistant() {
+  const [question, setQuestion] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+  const [payload, setPayload] = useState(null)
+
+  const ask = async (event) => {
+    event.preventDefault()
+    const text = question.trim()
+    if (!text) {
+      setError("Indiquez une question.")
+      setPayload(null)
+      return
+    }
+    setBusy(true)
+    setError("")
+    try {
+      setPayload(await moodService.askAssistant(text))
+    } catch (err) {
+      setPayload(null)
+      setError(err.message || "L'assistant est indisponible.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card className="mb-5 border-stone-200 p-5 shadow-sm">
+      <SectionTitle
+        title="Assistant"
+        subtitle="Une question à la fois, à partir de vos check-ins. Ce n'est pas un diagnostic, et la conversation n'est pas conservée."
+      />
+      <form onSubmit={ask} className="flex flex-col gap-3 sm:flex-row sm:items-end">
+        <Input
+          className="min-w-0 flex-1"
+          label="Votre question"
+          value={question}
+          onChange={(event) => setQuestion(event.target.value)}
+          maxLength={1000}
+          placeholder="Par exemple : quelles situations reviennent lorsque je suis stressé ?"
+        />
+        <Button type="submit" variant="ai" disabled={busy}>
+          <MessageCircle size={16} /> {busy ? "Réponse..." : "Envoyer"}
+        </Button>
+      </form>
+      {busy && <div className="mt-4"><Loading label="Lecture de vos check-ins..." /></div>}
+      {error && <p role="alert" className="mt-4 text-sm text-red-700">{error}</p>}
+      {payload && !busy && (
+        <div className="mt-4 space-y-4">
+          <div className="rounded-2xl bg-stone-50 p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Réponse</p>
+            <p className="mt-2 text-sm leading-6 text-stone-800">{payload.answer}</p>
+          </div>
+          {payload.sources?.length ? (
+            <div className="space-y-3">
+              <p className="text-sm font-semibold text-stone-700">Sources utilisées</p>
+              {payload.sources.map((item) => (
+                <Link
+                  key={item.id}
+                  to={`/mood/${item.id}`}
+                  className="block rounded-xl border border-stone-200 p-4 motion-safe:transition-colors hover:border-teal-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-800"
+                >
+                  <span className="flex items-center gap-2 font-semibold text-stone-900">
+                    <span className="size-2.5 rounded-full" style={{ backgroundColor: moodColors[item.mood] || "#a8a29e" }} aria-hidden="true" />
+                    {item.mood}
+                  </span>
+                  <p className="mt-1 text-xs text-stone-500">
+                    {formatMoodDate(item.date)} · Intensité {item.intensity}/5
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-stone-600">{item.excerpt}</p>
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-stone-500">Aucune source utilisée. Aucun check-in assez proche n'a été trouvé.</p>
+          )}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function MoodSemanticSearch() {
+  const [query, setQuery] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+  const [payload, setPayload] = useState(null)
+
+  const search = async (event) => {
+    event.preventDefault()
+    const text = query.trim()
+    if (!text) {
+      setError("Indiquez ce que vous cherchez.")
+      setPayload(null)
+      return
+    }
+    setBusy(true)
+    setError("")
+    try {
+      setPayload(await moodService.semanticSearch(text))
+    } catch (err) {
+      setPayload(null)
+      setError(err.message || "La recherche sémantique est indisponible.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card className="mb-5 border-stone-200 p-5 shadow-sm">
+      <SectionTitle
+        title="Recherche par le sens"
+        subtitle="Retrouve des notes proches par le sens. Le nombre affiché est une similarité, pas un pourcentage ni un diagnostic."
+      />
+      <form onSubmit={search} className="flex flex-col gap-3 sm:flex-row sm:items-end">
+        <Input
+          className="min-w-0 flex-1"
+          label="Que voulez-vous retrouver ?"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          maxLength={1000}
+          placeholder="Par exemple : je suis épuisé et je dors mal"
+        />
+        <Button type="submit" disabled={busy}>
+          <Search size={16} /> {busy ? "Recherche..." : "Rechercher"}
+        </Button>
+      </form>
+      {busy && <div className="mt-4"><Loading label="Comparaison de vos notes..." /></div>}
+      {error && <p role="alert" className="mt-4 text-sm text-red-700">{error}</p>}
+      {payload && !busy && payload.results.length === 0 && (
+        <p className="mt-4 text-sm text-stone-500">{payload.message || "Aucun résultat assez proche."}</p>
+      )}
+      {payload && !busy && payload.pending > 0 && (
+        <p className="mt-3 text-sm text-stone-500">
+          Certaines notes ne sont pas encore indexées. Relancez la recherche pour les inclure.
+        </p>
+      )}
+      {payload && !busy && payload.results.length > 0 && (
+        <div className="mt-4 space-y-3">
+          {payload.results.map((item) => (
+            <Link
+              key={item.id}
+              to={`/mood/${item.id}`}
+              className="block rounded-xl border border-stone-200 p-4 motion-safe:transition-colors hover:border-teal-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-800"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="flex items-center gap-2 font-semibold text-stone-900">
+                  <span className="size-2.5 rounded-full" style={{ backgroundColor: moodColors[item.mood] || "#a8a29e" }} aria-hidden="true" />
+                  {item.mood}
+                </span>
+                <span
+                  className="text-xs font-semibold text-stone-600"
+                  title="Similarité cosinus entre la recherche et la note. Ce n'est ni un pourcentage ni un diagnostic."
+                >
+                  Similarité {Number(item.similarity).toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-stone-500">
+                {formatMoodDate(item.date)} · Intensité {item.intensity}/5
+              </p>
+              <MoodIntensityMeter value={item.intensity} />
+              <p className="mt-2 text-sm leading-6 text-stone-600">{item.excerpt}</p>
+            </Link>
+          ))}
+        </div>
+      )}
+    </Card>
   )
 }
 
@@ -1144,6 +1672,8 @@ export function MoodPage({ mode = "dashboard" }) {
   const [summary, setSummary] = useState(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [summaryError, setSummaryError] = useState("")
+  const [analysisBusy, setAnalysisBusy] = useState(false)
+  const [analysisNotice, setAnalysisNotice] = useState("")
   const filters = useMemo(
     () => moodQuery(period, moodType, dateFrom, dateTo),
     [period, moodType, dateFrom, dateTo],
@@ -1200,6 +1730,8 @@ export function MoodPage({ mode = "dashboard" }) {
     setDetail(null)
     setDetailLoading(true)
     setError("")
+    setAnalysisNotice("")
+    setAnalysisBusy(false)
     moodService.getMood(id)
       .then((entry) => { if (active) setDetail(entry) })
       .catch((err) => { if (active) setError(err.message || "Humeur introuvable.") })
@@ -1240,6 +1772,23 @@ export function MoodPage({ mode = "dashboard" }) {
     }
   }
 
+  const analyzeNote = async (regenerate) => {
+    if (!detail || analysisBusy || !detail.note?.trim()) return
+    setAnalysisBusy(true)
+    setAnalysisNotice("")
+    try {
+      const result = await moodService.analyzeNote(detail.id, { regenerate })
+      setDetail((current) => current ? { ...current, note_analysis: result.note_analysis } : current)
+      if (result.analysis_status === "unavailable" || result.analysis_status === "error") {
+        setAnalysisNotice(result.message || "L'analyse n'a pas pu être produite.")
+      }
+    } catch (err) {
+      setAnalysisNotice(err.message || "Analyse impossible.")
+    } finally {
+      setAnalysisBusy(false)
+    }
+  }
+
   const remove = async () => {
     if (!confirm || busy) return
     setBusy(true)
@@ -1263,8 +1812,9 @@ export function MoodPage({ mode = "dashboard" }) {
         busy={busy}
         error={error}
         title="Comment vous sentez-vous ?"
-        subtitle="Il n’y a pas de bonne ou de mauvaise réponse."
+        subtitle="Choisissez une humeur, puis une intensité. La note reste la vôtre."
         submitLabel="Enregistrer mon humeur"
+        cancelTo="/mood"
         onSubmit={save}
       />
     )
@@ -1272,7 +1822,7 @@ export function MoodPage({ mode = "dashboard" }) {
 
   if (mode === "edit") {
     if (detailLoading) return <Loading label="Chargement de l’humeur..." />
-    if (error) return <p role="alert" className="text-red-600">{error}</p>
+    if (error) return <p role="alert" className="text-red-700">{error}</p>
     if (!detail) return <Empty title="Humeur introuvable" text="Cet enregistrement n’existe pas ou ne vous appartient pas." />
     return (
       <MoodForm
@@ -1286,8 +1836,9 @@ export function MoodPage({ mode = "dashboard" }) {
         busy={busy}
         error={error}
         title="Modifier cette humeur"
-        subtitle="Ajustez l’émotion, l’intensité ou la note."
+        subtitle="Ajustez l’émotion, l’intensité ou la note. Rien n’est enregistré avant la validation."
         submitLabel="Enregistrer les modifications"
+        cancelTo={`/mood/${detail.id}`}
         onSubmit={save}
       />
     )
@@ -1295,23 +1846,36 @@ export function MoodPage({ mode = "dashboard" }) {
 
   if (mode === "detail") {
     if (detailLoading) return <Loading label="Chargement de l’humeur..." />
-    if (error && !detail) return <p role="alert" className="text-red-600">{error}</p>
+    if (error && !detail) return <p role="alert" className="text-red-700">{error}</p>
     if (!detail) return <Empty title="Humeur introuvable" text="Cet enregistrement n’existe pas ou ne vous appartient pas." />
     return (
-      <>
-        <Card className="mx-auto max-w-xl p-8 text-center">
-          <Smile className="mx-auto" size={50} style={{ color: moodColors[detail.mood] || "#6c63ff" }} />
-          <h1 className="mt-4 text-3xl font-extrabold">{detail.mood}</h1>
-          <p className="mt-2 text-slate-500">{formatMoodDate(detail.date)} · Intensité {detail.intensity}/5</p>
-          <p className="mt-6 rounded-xl bg-slate-50 p-4">{detail.note || "Aucune note."}</p>
-          <div className="mt-6 flex flex-wrap justify-center gap-2">
-            <Link to={`/mood/${detail.id}/edit`}><Button variant="secondary"><Edit3 size={16} /> Modifier</Button></Link>
-            <Button variant="danger" onClick={() => setConfirm(detail)}><Trash2 size={16} /> Supprimer</Button>
-            <Link to="/mood/history" className="inline-flex items-center font-bold text-violet-600">Retour à l’historique</Link>
-          </div>
-        </Card>
+      <div className="mx-auto max-w-2xl space-y-5">
+        <div>
+          <Link to="/mood/history" className="text-sm font-semibold text-teal-800 hover:underline">Retour à l’historique</Link>
+          <p className="mt-3 text-sm text-stone-500">{formatMoodDate(detail.date)}</p>
+          <h1 className="mt-1 flex items-center gap-3 text-3xl font-semibold tracking-tight text-stone-950">
+            <span className="size-3 rounded-full" style={{ backgroundColor: moodColors[detail.mood] || "#a8a29e" }} aria-hidden="true" />
+            {detail.mood}
+          </h1>
+          <p className="mt-3 text-sm text-stone-600">Intensité {detail.intensity} sur 5</p>
+          <div className="mt-2"><MoodIntensityMeter value={detail.intensity} /></div>
+        </div>
+        <section className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
+          <h2 className="text-sm font-semibold text-stone-800">Note personnelle</h2>
+          <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-stone-700">{detail.note || "Aucune note."}</p>
+        </section>
+        <div className="flex flex-wrap gap-2">
+          <Link to={`/mood/${detail.id}/edit`}><Button variant="secondary"><Edit3 size={16} /> Modifier</Button></Link>
+          <Button variant="danger" onClick={() => setConfirm(detail)}><Trash2 size={16} /> Supprimer</Button>
+        </div>
+        <MoodNoteAnalysisCard
+          detail={detail}
+          busy={analysisBusy}
+          notice={analysisNotice}
+          onAnalyze={analyzeNote}
+        />
         <MoodDeleteModal item={confirm} busy={busy} onClose={() => setConfirm(null)} onConfirm={remove} />
-      </>
+      </div>
     )
   }
 
@@ -1321,6 +1885,8 @@ export function MoodPage({ mode = "dashboard" }) {
     mood: point.mood,
   }))
   const distribution = stats?.distribution || []
+  const shift = intensityShift(stats?.intensity_over_time)
+  const monthDominant = dominantMood(monthStats)
 
   if (mode === "insights") {
     const observations = []
@@ -1338,11 +1904,12 @@ export function MoodPage({ mode = "dashboard" }) {
     return (
       <>
         <PageHeader
-          title="Tendances de vos émotions"
-          subtitle="Des observations informatives sur les données que vous avez enregistrées."
+          eyebrow="Humeurs"
+          title="Tendances"
+          subtitle="Les graphiques décrivent ce que vous avez enregistré. Ils n'expliquent pas pourquoi."
         />
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          Ces tendances sont informatives et ne constituent ni un avis médical ni un diagnostic psychologique.
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
+          Ces tendances sont informatives. Elles ne constituent ni un avis médical, ni un diagnostic, ni un lien de cause à effet.
         </div>
         <div className="mt-5">
           <MoodFilters
@@ -1356,42 +1923,56 @@ export function MoodPage({ mode = "dashboard" }) {
         {statsError && <p role="alert" className="mb-4 text-sm text-red-600">{statsError}</p>}
         {!statsLoading && !statsError && (
           <div className="grid gap-5 lg:grid-cols-2">
-            <Card className="p-5">
-              <SectionTitle title="Humeurs fréquentes" />
+            <Card className="border-stone-200 p-5 shadow-sm">
+              <SectionTitle title="Humeurs fréquentes" subtitle="Répartition des check-ins de la période filtrée." />
               {distribution.length ? (
-                <div className="h-64">
-                  <ResponsiveContainer>
-                    <PieChart>
-                      <Pie data={distribution} dataKey="count" nameKey="mood" innerRadius={55} outerRadius={85}>
-                        {distribution.map((entry) => (
-                          <Cell key={entry.mood} fill={moodColors[entry.mood] || "#6c63ff"} />
-                        ))}
-                      </Pie>
-                      <Tooltip />
-                    </PieChart>
-                  </ResponsiveContainer>
+                <div className="grid items-center gap-4 sm:grid-cols-[12rem_1fr]">
+                  <div className="h-52">
+                    <ResponsiveContainer>
+                      <PieChart>
+                        <Pie data={distribution} dataKey="count" nameKey="mood" innerRadius={48} outerRadius={72}>
+                          {distribution.map((entry) => (
+                            <Cell key={entry.mood} fill={moodColors[entry.mood] || "#6c63ff"} />
+                          ))}
+                        </Pie>
+                        <Tooltip />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <ul className="space-y-2">
+                    {distribution.map((entry) => (
+                      <li key={entry.mood} className="flex items-center justify-between gap-3 text-sm">
+                        <span className="flex min-w-0 items-center gap-2 text-stone-800">
+                          <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: moodColors[entry.mood] || "#a8a29e" }} aria-hidden="true" />
+                          {entry.mood}
+                        </span>
+                        <span className="text-stone-500">{entry.count}</span>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
-              ) : <p className="text-sm text-slate-500">Aucune humeur enregistrée.</p>}
+              ) : <p className="text-sm text-stone-500">Aucune humeur sur cette période. Enregistrez un check-in ou élargissez le filtre.</p>}
             </Card>
-            <Card className="p-5">
-              <SectionTitle title="Évolution de l’intensité" />
+            <Card className="border-stone-200 p-5 shadow-sm">
+              <SectionTitle title="Intensité" subtitle="Chaque point est un check-in, de 1 à 5." />
               {chart.length ? (
                 <div className="h-64">
                   <ResponsiveContainer>
-                    <AreaChart data={chart}>
-                      <XAxis dataKey="day" />
-                      <YAxis domain={[0, 5]} />
-                      <Tooltip />
-                      <Area dataKey="value" stroke="#6C63FF" fill="#ede9fe" />
+                    <AreaChart data={chart} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                      <CartesianGrid stroke="#e7e5e4" vertical={false} />
+                      <XAxis dataKey="day" tick={{ fontSize: 12, fill: "#78716c" }} interval="preserveStartEnd" />
+                      <YAxis domain={[0, 5]} width={28} tick={{ fontSize: 12, fill: "#78716c" }} />
+                      <Tooltip content={<MoodChartTooltip />} />
+                      <Area dataKey="value" name="Intensité" stroke="#115e59" fill="#ccfbf1" strokeWidth={2} />
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>
-              ) : <p className="text-sm text-slate-500">Aucune intensité à afficher.</p>}
+              ) : <p className="text-sm text-stone-500">Pas encore assez de check-ins pour tracer une courbe.</p>}
             </Card>
-            <Card className="p-5 lg:col-span-2">
+            <Card className="border-stone-200 p-5 shadow-sm lg:col-span-2">
               <SectionTitle
-                title="Synthèse descriptive"
-                subtitle="Les chiffres sont calculés par l’application. Le texte n’apparaît que s’il a été rédigé par le modèle local."
+                title="Synthèse"
+                subtitle="À gauche, les chiffres calculés. À droite, le texte du modèle, seulement s'il a été demandé."
               />
               <div className="mb-4 flex flex-wrap items-end gap-3">
                 <Select
@@ -1442,11 +2023,11 @@ export function MoodPage({ mode = "dashboard" }) {
                 </div>
               )}
             </Card>
-            <Card className="p-5 lg:col-span-2">
-              <SectionTitle title="Observations" />
-              <ul className="space-y-3 text-sm text-slate-600">
+            <Card className="border-stone-200 p-5 shadow-sm lg:col-span-2">
+              <SectionTitle title="Lecture des chiffres" subtitle="Ces phrases reprennent les statistiques, sans interprétation supplémentaire." />
+              <ul className="space-y-3 text-sm text-stone-600">
                 {observations.map((line) => (
-                  <li key={line} className="rounded-xl bg-slate-50 p-4">{line}</li>
+                  <li key={line} className="rounded-xl bg-stone-50 p-4">{line}</li>
                 ))}
               </ul>
             </Card>
@@ -1460,13 +2041,17 @@ export function MoodPage({ mode = "dashboard" }) {
     return (
       <>
         <PageHeader
-          title="Historique des humeurs"
+          eyebrow="Humeurs"
+          title="Historique"
+          subtitle="Retrouvez un check-in, posez une question ou cherchez par le sens."
           actions={
             <Link to="/mood/new">
               <Button><Plus /> Nouveau check-in</Button>
             </Link>
           }
         />
+        <MoodAssistant />
+        <MoodSemanticSearch />
         <MoodFilters
           moodType={moodType} setMoodType={setMoodType}
           period={period} setPeriod={setPeriod}
@@ -1484,19 +2069,32 @@ export function MoodPage({ mode = "dashboard" }) {
         )}
         <div className="space-y-3">
           {items.map((entry) => (
-            <Card key={entry.id} className="flex items-center gap-4 p-4">
-              <Smile style={{ color: moodColors[entry.mood] || "#6c63ff" }} />
-              <Link to={`/mood/${entry.id}`} className="flex-1">
-                <b>{entry.mood}</b>
-                <p className="text-sm text-slate-500">{entry.note || "Aucune note."}</p>
-              </Link>
-              <Badge>{entry.intensity}/5</Badge>
-              <span className="text-xs text-slate-400">{formatMoodDate(entry.date)}</span>
-              <Link to={`/mood/${entry.id}/edit`} aria-label="Modifier"><Edit3 size={17} className="text-slate-400" /></Link>
-              <button type="button" onClick={() => setConfirm(entry)} aria-label="Supprimer">
-                <Trash2 size={17} className="text-slate-400" />
-              </button>
-            </Card>
+            <article key={entry.id} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="inline-flex items-center gap-2 font-semibold text-stone-950">
+                      <span className="size-2.5 rounded-full" style={{ backgroundColor: moodColors[entry.mood] || "#a8a29e" }} aria-hidden="true" />
+                      {entry.mood}
+                    </span>
+                    <span className="text-xs text-stone-500">{formatMoodDate(entry.date)}</span>
+                  </div>
+                  <div className="mt-2"><MoodIntensityMeter value={entry.intensity} /></div>
+                  <p className="mt-2 line-clamp-2 text-sm leading-6 text-stone-600">{entry.note || "Aucune note."}</p>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <Link to={`/mood/${entry.id}`} className="inline-flex min-h-11 items-center rounded-xl bg-stone-900 px-3 text-sm font-semibold text-white hover:bg-stone-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-800">
+                    Voir
+                  </Link>
+                  <Link to={`/mood/${entry.id}/edit`} aria-label={`Modifier le check-in ${entry.mood}`} className="inline-flex size-11 items-center justify-center rounded-xl border border-stone-200 text-stone-600 hover:bg-stone-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-800">
+                    <Edit3 size={17} />
+                  </Link>
+                  <button type="button" onClick={() => setConfirm(entry)} aria-label={`Supprimer le check-in ${entry.mood}`} className="inline-flex size-11 items-center justify-center rounded-xl border border-stone-200 text-stone-600 hover:bg-rose-50 hover:text-rose-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-800">
+                    <Trash2 size={17} />
+                  </button>
+                </div>
+              </div>
+            </article>
           ))}
         </div>
         {!listLoading && total > items.length && (
@@ -1510,35 +2108,49 @@ export function MoodPage({ mode = "dashboard" }) {
   return (
     <>
       <PageHeader
-        title="Mon humeur"
-        subtitle="Observez vos émotions avec douceur, sans jugement."
+        eyebrow="Humeurs"
+        title="Aujourd'hui"
+        subtitle="Un aperçu de ce mois et des quatorze derniers jours."
         actions={
           <>
             <Link to="/mood/history"><Button variant="secondary">Historique</Button></Link>
-            <Link to="/mood/insights"><Button variant="secondary">Insights</Button></Link>
+            <Link to="/mood/insights"><Button variant="secondary">Tendances</Button></Link>
             <Link to="/mood/new"><Button><Plus /> Enregistrer</Button></Link>
           </>
         }
       />
       {statsLoading && <Loading label="Chargement de vos humeurs..." />}
-      {statsError && <p role="alert" className="mb-4 text-sm text-red-600">{statsError}</p>}
+      {statsError && <p role="alert" className="mb-4 text-sm text-red-700">{statsError}</p>}
       {!statsLoading && !statsError && (
         <>
-          <div className="grid gap-4 sm:grid-cols-3">
-            <Stat label="Humeur actuelle" value={stats?.latest?.mood || "—"} icon={Smile} />
-            <Stat label="Moyenne mensuelle" value={formatAverage(monthStats?.average_intensity)} icon={Heart} />
-            <Stat label="Check-ins" value={monthStats?.count ?? 0} icon={CalendarDays} />
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <MoodMetric icon={CalendarDays} label="Check-ins ce mois" value={monthStats?.count ?? 0} hint="Enregistrements du mois en cours" />
+            <MoodMetric
+              icon={Smile}
+              label="Humeur la plus fréquente"
+              value={monthDominant?.mood || "—"}
+              tone={monthDominant ? moodColors[monthDominant.mood] : undefined}
+              hint={monthDominant ? `${monthDominant.count} fois ce mois` : "Pas encore de check-in ce mois"}
+            />
+            <MoodMetric icon={Heart} label="Intensité moyenne" value={formatAverage(monthStats?.average_intensity)} hint="Moyenne du mois, sur 5" />
+            <MoodMetric
+              icon={ArrowUpRight}
+              label="Écart sur 14 jours"
+              value={shift?.value || "—"}
+              hint={shift?.hint || "Il faut au moins deux check-ins sur la période"}
+            />
           </div>
-          <Card className="mt-5 p-5">
-            <SectionTitle title="Les 14 derniers jours" />
+          <Card className="mt-5 border-stone-200 p-5 shadow-sm">
+            <SectionTitle title="Intensité, 14 derniers jours" subtitle={stats?.latest?.mood ? `Dernier check-in de la période : ${stats.latest.mood}.` : "Aucun check-in sur les 14 derniers jours."} />
             {chart.length ? (
               <div className="h-72">
                 <ResponsiveContainer>
-                  <AreaChart data={chart}>
-                    <XAxis dataKey="day" />
-                    <YAxis domain={[0, 5]} />
-                    <Tooltip />
-                    <Area dataKey="value" stroke="#6C63FF" fill="#ede9fe" />
+                  <AreaChart data={chart} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                    <CartesianGrid stroke="#e7e5e4" vertical={false} />
+                    <XAxis dataKey="day" tick={{ fontSize: 12, fill: "#78716c" }} interval="preserveStartEnd" />
+                    <YAxis domain={[0, 5]} width={28} tick={{ fontSize: 12, fill: "#78716c" }} />
+                    <Tooltip content={<MoodChartTooltip />} />
+                    <Area dataKey="value" name="Intensité" stroke="#115e59" fill="#ccfbf1" strokeWidth={2} />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>

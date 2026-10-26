@@ -9,9 +9,18 @@ import {
   Target,
   CheckCircle2,
   Send,
+  Check,
+  CalendarDays,
+  Sparkles as SparklesIcon,
 } from "lucide-react"
 import { useStore } from "../../store/AppStore"
 import { goalsService } from "../../services/goalsService"
+import authService from "../../services/authService"
+import { useGoalsData } from "./components/useGoalsData"
+import { ProgressRing } from "./components/ProgressRing"
+import { StatusDonut, GoalsProgressChart, WeekBars } from "./components/GoalsCharts"
+import { HabitHeatmap } from "./components/HabitHeatmap"
+import { EmptyStarter } from "./components/EmptyStarter"
 import {
   Badge,
   Button,
@@ -87,7 +96,7 @@ function ProgressBar({ value, color = "bg-violet-600" }) {
   return (
     <div className="h-2 rounded bg-slate-100">
       <div
-        className={`h-full rounded ${color}`}
+        className={`h-full rounded transition-all duration-500 motion-reduce:transition-none ${color}`}
         style={{ width: `${Math.min(100, Math.max(0, value))}%` }}
       />
     </div>
@@ -273,6 +282,9 @@ function GoalDetail() {
   const [goal, setGoal] = useState(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [breakdown, setBreakdown] = useState(null)
+  const [breakdownLoading, setBreakdownLoading] = useState(false)
+  const [stepsSaving, setStepsSaving] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -307,6 +319,35 @@ function GoalDetail() {
       nav("/goals")
     } catch (err) {
       notify(err.message, "error")
+    }
+  }
+
+  const requestBreakdown = async () => {
+    setBreakdownLoading(true)
+    try {
+      const result = await goalsService.breakdownGoal(id)
+      setBreakdown(result.steps || [])
+      notify("Découpage proposé par l’IA")
+    } catch (error) {
+      notify(error.message, "error")
+    } finally {
+      setBreakdownLoading(false)
+    }
+  }
+
+  const saveBreakdown = async () => {
+    if (!breakdown?.length) return
+    setStepsSaving(true)
+    try {
+      await goalsService.createGoalSteps(id, breakdown)
+      const updated = await goalsService.getGoal(id)
+      setGoal(updated)
+      setBreakdown(null)
+      notify("Étapes ajoutées à l’objectif")
+    } catch (error) {
+      notify(error.message, "error")
+    } finally {
+      setStepsSaving(false)
     }
   }
 
@@ -350,6 +391,11 @@ function GoalDetail() {
         subtitle={goal.description}
         actions={
           <>
+            <Link to="/goals">
+              <Button variant="secondary" aria-label="Retourner à la liste des objectifs">
+                Retourner
+              </Button>
+            </Link>
             <Link to={`/goals/${id}/edit`}>
               <Button variant="secondary">
                 <Edit3 size={16} /> Modifier
@@ -357,6 +403,15 @@ function GoalDetail() {
             </Link>
             <Button variant="danger" onClick={remove}>
               <Trash2 size={16} /> Supprimer
+            </Button>
+            <Button
+              variant="ai"
+              onClick={requestBreakdown}
+              disabled={busy || breakdownLoading}
+              aria-label="Découper l’objectif avec l’intelligence artificielle"
+            >
+              <SparklesIcon size={16} />
+              {breakdownLoading ? "Analyse..." : "Découper avec l’IA"}
             </Button>
             {goal.status !== "completed" && (
               <Button
@@ -408,6 +463,49 @@ function GoalDetail() {
           </p>
         )}
       </Card>
+      <Modal
+        open={Boolean(breakdown)}
+        onClose={() => !stepsSaving && setBreakdown(null)}
+        title="Découpage proposé par l’IA"
+        actions={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => setBreakdown(null)}
+              disabled={stepsSaving}
+            >
+              Annuler
+            </Button>
+            <Button onClick={saveBreakdown} disabled={stepsSaving || !breakdown?.length}>
+              {stepsSaving ? "Enregistrement..." : "Ajouter les étapes"}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-slate-500">
+          Vérifiez les étapes avant de les ajouter à votre objectif.
+        </p>
+        <div className="mt-4 max-h-72 space-y-2 overflow-y-auto">
+          {breakdown?.map((step, index) => (
+            <div
+              key={`${step.title}-${index}`}
+              className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3"
+            >
+              <span className="grid size-6 shrink-0 place-items-center rounded-full bg-violet-100 text-xs font-bold text-violet-700">
+                {index + 1}
+              </span>
+              <div>
+                <p className="font-semibold text-slate-800">{step.title}</p>
+                {step.due_date && (
+                  <p className="mt-1 text-xs text-slate-500">
+                    Échéance : {formatDisplay(step.due_date)}
+                  </p>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Modal>
     </>
   )
 }
@@ -418,24 +516,141 @@ function GoalDetail() {
 
 function GoalList() {
   const { notify } = useStore()
-  const [goals, setGoals] = useState([])
-  const [loading, setLoading] = useState(true)
+  const { user } = useStore()
+  const { goals, habits, loading, reload, setHabits } = useGoalsData()
   const [filter, setFilter] = useState("all")
-
-  useEffect(() => {
-    let active = true
-    goalsService
-      .listGoals()
-      .then((items) => active && setGoals(items))
-      .catch((e) => notify(e.message, "error"))
-      .finally(() => active && setLoading(false))
-    return () => {
-      active = false
-    }
-  }, [])
-
   const count = (state) => goals.filter((g) => goalState(g) === state).length
   const list = goals.filter((g) => filter === "all" || goalState(g) === filter)
+  const today = todayStr()
+  const doneToday = habits.filter((habit) =>
+    habit.checks?.some((check) => check.date === today && check.completed),
+  ).length
+  const doneDates = new Set(
+    habits.flatMap((habit) =>
+      (habit.checks || []).filter((check) => check.completed).map((check) => check.date),
+    ),
+  )
+  const streak = computeStreak(doneDates)
+  const record = [...doneDates]
+    .sort()
+    .reduce(
+      (state, date) => {
+        const previous = state.last ? addDays(state.last, 1) : null
+        const current = previous === date ? state.current + 1 : 1
+        return { last: date, current, best: Math.max(state.best, current) }
+      },
+      { last: "", current: 0, best: 0 },
+    ).best
+  const firstName =
+    user?.first_name ||
+    user?.firstName ||
+    authService.getCachedUser()?.first_name ||
+    authService.getCachedUser()?.firstName ||
+    "vous"
+  const messages = [
+    "Chaque petite action compte. Continuez à avancer à votre rythme.",
+    "Votre régularité d’aujourd’hui construit votre réussite de demain.",
+    "Un pas après l’autre, vous êtes en train de créer quelque chose de solide.",
+    "Vous n’avez pas besoin d’être parfait(e), seulement constant(e).",
+    "Les grandes réussites commencent par une intention tenue aujourd’hui.",
+    "Votre futur vous remerciera pour l’effort que vous faites maintenant.",
+    "Célébrez les progrès, même les plus discrets : ils sont bien réels.",
+    "Vous avez déjà commencé : gardez cette belle énergie.",
+    "La meilleure façon d’avancer est de choisir une prochaine petite étape.",
+    "Aujourd’hui est une nouvelle occasion de vous rapprocher de vos objectifs.",
+  ]
+  let motivation = messages[new Date().getDate() % messages.length]
+  if (!goals.length && !habits.length) motivation = "Tout grand changement commence par une première petite action."
+  else if (habits.length && doneToday === habits.length) motivation = "Journée parfaite : vous avez tenu toutes vos habitudes !"
+  else if (streak > 1) motivation = `Votre série de ${streak} jours est en cours : quelle belle constance !`
+  else if (goals.some((goal) => goalState(goal) === "overdue")) motivation = "Un objectif vous attend encore : reprenez-le avec douceur, sans jugement."
+  else if (goals.some((goal) => goal.end_date && daysUntil(goal.end_date) <= 7 && goalState(goal) === "active")) motivation = "Une échéance approche : choisissez une action simple à faire aujourd’hui."
+
+  const toggleHabit = async (habit, checked) => {
+    const previous = habits
+    setHabits((items) =>
+      items.map((item) =>
+        item.id === habit.id
+          ? {
+              ...item,
+              checks: [
+                ...(item.checks || []).filter((check) => check.date !== today),
+                { id: `optimistic-${today}`, date: today, completed: checked },
+              ],
+            }
+          : item,
+      ),
+    )
+    try {
+      await goalsService.checkHabit(habit.id, today, checked)
+    } catch (error) {
+      setHabits(previous)
+      notify(error.message, "error")
+    }
+  }
+
+  const createHabit = async (name) => {
+    try {
+      await goalsService.createHabit({ name, frequency: "daily" })
+      notify("Habitude ajoutée")
+      await reload()
+    } catch (error) {
+      notify(error.message, "error")
+      throw error
+    }
+  }
+
+  const createGoal = async (title) => {
+    try {
+      await goalsService.createGoal({
+        title,
+        description: "",
+        start_date: today,
+        end_date: addDays(today, 90),
+        status: "not-started",
+        progress: 0,
+      })
+      notify("Objectif ajouté")
+      await reload()
+    } catch (error) {
+      notify(error.message, "error")
+      throw error
+    }
+  }
+
+  const weekData = Array.from({ length: 7 }, (_, index) => {
+    const date = addDays(today, index - 6)
+    return {
+      date,
+      label: new Intl.DateTimeFormat("fr-FR", { weekday: "short" }).format(new Date(`${date}T00:00:00`)).replace(".", ""),
+      count: habits.reduce((total, habit) => total + (habit.checks || []).filter((check) => check.date === date && check.completed).length, 0),
+      today: date === today,
+    }
+  })
+  const heatmapDays = Array.from({ length: 84 }, (_, index) => {
+    const date = addDays(today, index - 83)
+    const count = habits.reduce((total, habit) => total + (habit.checks || []).filter((check) => check.date === date && check.completed).length, 0)
+    const ratio = habits.length ? count / habits.length : 0
+    return {
+      key: date,
+      date: new Date(`${date}T00:00:00`),
+      count,
+      future: date > today,
+      level: ratio === 0 ? 100 : ratio < 0.25 ? 200 : ratio < 0.5 ? 300 : ratio < 0.75 ? 400 : 600,
+    }
+  })
+  const chartGoals = [...goals]
+    .sort((a, b) => b.progress - a.progress)
+    .map((goal) => ({
+      name: goal.title.length > 18 ? `${goal.title.slice(0, 18)}…` : goal.title,
+      progress: goal.progress,
+      color: goalState(goal) === "completed" ? "#10b981" : goalState(goal) === "overdue" ? "#ef4444" : "#7c3aed",
+    }))
+  const statusData = [
+    { name: "Terminés", value: count("completed"), color: "#10b981" },
+    { name: "En cours", value: count("active"), color: "#7c3aed" },
+    { name: "En retard", value: count("overdue"), color: "#ef4444" },
+  ]
 
   return (
     <>
@@ -458,6 +673,36 @@ function GoalList() {
           </>
         }
       />
+      <Card className="mb-5 overflow-hidden border-0 bg-gradient-to-br from-violet-700 via-violet-600 to-indigo-600 p-6 text-white shadow-lg sm:p-8">
+        <p className="text-sm font-bold text-violet-200">Votre espace de progression</p>
+        <h1 className="mt-2 text-2xl font-extrabold sm:text-3xl">Bonjour {firstName} 👋</h1>
+        <p className="mt-3 max-w-2xl text-sm leading-6 text-violet-100">{motivation}</p>
+        <div className="mt-5 flex flex-wrap gap-3 text-xs font-bold text-violet-50">
+          <span className="rounded-full bg-white/15 px-3 py-1.5">🔥 Série : {streak} jour{streak > 1 ? "s" : ""} · record {record}</span>
+          <span className="rounded-full bg-white/15 px-3 py-1.5">✓ {doneToday}/{habits.length || 0} aujourd’hui</span>
+        </div>
+      </Card>
+      {habits.length > 0 && (
+        <Card className="mb-5 p-5 sm:p-6">
+          <SectionTitle title="Aujourd’hui" subtitle="Un petit geste pour garder votre élan" />
+          <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
+            <ProgressRing value={doneToday / habits.length} label={`${doneToday}/${habits.length} habitudes`} />
+            <div className="w-full space-y-2">
+              {habits.map((habit) => {
+                const checked = habit.checks?.some((check) => check.date === today && check.completed)
+                return (
+                  <label key={habit.id} className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 transition ${checked ? "border-emerald-200 bg-emerald-50" : "border-slate-200 hover:border-violet-200"}`}>
+                    <input type="checkbox" checked={checked} onChange={(event) => toggleHabit(habit, event.target.checked)} className="size-5 accent-violet-600" aria-label={`Valider ${habit.name}`} />
+                    <span className={checked ? "font-semibold text-emerald-800 line-through" : "font-semibold text-slate-700"}>{habit.name}</span>
+                    {checked && <Check className="ml-auto text-emerald-600" size={18} />}
+                  </label>
+                )
+              })}
+            </div>
+          </div>
+          {doneToday === habits.length && <p className="mt-5 text-center font-extrabold text-emerald-700">Journée parfaite 🎉</p>}
+        </Card>
+      )}
       <div className="grid gap-4 sm:grid-cols-4">
         <Stat label="Total" value={goals.length} icon={Target} />
         <Stat label="Actifs" value={count("active")} icon={Target} />
@@ -480,12 +725,20 @@ function GoalList() {
           </Button>
         ))}
       </div>
+      <div className="my-5 grid gap-4 lg:grid-cols-2">
+        <StatusDonut data={statusData} />
+        <GoalsProgressChart data={chartGoals} />
+        <WeekBars data={habits.length ? weekData : []} />
+        <HabitHeatmap days={heatmapDays} habitCount={habits.length} />
+      </div>
       {loading ? (
         <Loading />
+      ) : !goals.length && !habits.length ? (
+        <EmptyStarter onCreateHabit={createHabit} onCreateGoal={createGoal} />
       ) : list.length === 0 ? (
         <Empty
-          title="Aucun objectif"
-          text="Créez votre premier objectif pour suivre votre progression."
+          title="Aucun objectif dans ce filtre"
+          text="Essayez un autre filtre ou créez un nouvel objectif."
           action={
             <Link to="/goals/new">
               <Button>
@@ -500,7 +753,7 @@ function GoalList() {
             const [label, cls] = STATE_BADGE[goalState(g)]
             return (
               <Link to={`/goals/${g.id}`} key={g.id}>
-                <Card className="p-5 hover:border-violet-300">
+                <Card className={`p-5 hover:border-violet-300 ${goalState(g) === "overdue" ? "border-red-200 bg-red-50/30" : ""}`}>
                   <div className="flex justify-between gap-2">
                     <Badge>{STATUS_LABELS[g.status]}</Badge>
                     <Badge className={cls}>{label}</Badge>
@@ -516,7 +769,13 @@ function GoalList() {
                   </div>
                   <p className="mt-2 text-xs font-bold">
                     {g.progress}%
-                    {g.end_date ? ` · avant le ${formatDisplay(g.end_date)}` : ""}
+                    {g.end_date
+                      ? daysUntil(g.end_date) < 0
+                        ? ` · en retard de ${Math.abs(daysUntil(g.end_date))} jour${Math.abs(daysUntil(g.end_date)) > 1 ? "s" : ""}`
+                        : daysUntil(g.end_date) === 0
+                          ? " · échéance aujourd’hui"
+                          : ` · J-${daysUntil(g.end_date)}`
+                      : ""}
                   </p>
                 </Card>
               </Link>

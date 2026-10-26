@@ -54,6 +54,45 @@ class Goal(models.Model):
         return self.title
 
 
+class GoalProgress(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    goal = models.ForeignKey(
+        Goal,
+        on_delete=models.CASCADE,
+        related_name="history",
+    )
+
+    progress = models.PositiveSmallIntegerField(
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+
+class GoalStep(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    goal = models.ForeignKey(
+        Goal,
+        on_delete=models.CASCADE,
+        related_name="steps",
+    )
+
+    title = models.CharField(max_length=255)
+    done = models.BooleanField(default=False)
+    order = models.PositiveIntegerField(default=0)
+    due_date = models.DateField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["order", "created_at"]
+
+
 class Habit(models.Model):
     """
     A habit the user wants to follow (daily or weekly).

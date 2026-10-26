@@ -317,7 +317,7 @@ export default function AppShell() {
                     {displayName}
                   </div>
 
-                  <div className="text-[10px] text-slate-400">
+                  <div className="text-[10px] text-slate-600">
                     {userRole}
                   </div>
 
