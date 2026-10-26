@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -7,6 +7,7 @@ from django.db import transaction
 from rest_framework.test import APITestCase
 from rest_framework import status
 from apps.media.models import Media
+from apps.media.services import AudioTranscriptionService
 from apps.journal.models import JournalEntry
 
 User = get_user_model()
@@ -521,3 +522,173 @@ class MediaAPITest(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.assertFalse(Media.objects.filter(id=media1.id).exists())
         self.assertTrue(Media.objects.filter(id=media2.id).exists())
+
+
+class MediaTranscriptionAPITest(APITestCase):
+    """Test audio transcription endpoint and AudioTranscriptionService in apps.media"""
+
+    def setUp(self):
+        AudioTranscriptionService.reset_model()
+        self.user = User.objects.create_user(
+            username="transcribe_user",
+            email="transcribe@example.com",
+            password="testpass123",
+        )
+        self.other_user = User.objects.create_user(
+            username="other_transcribe_user",
+            email="other_transcribe@example.com",
+            password="testpass123",
+        )
+        self.client.force_authenticate(user=self.user)
+
+        self.audio_file = SimpleUploadedFile(
+            "voice_sample.mp3", VALID_AUDIO_MP3_BYTES, content_type="audio/mpeg"
+        )
+        self.audio_media = Media.objects.create(
+            user=self.user,
+            title="Sample Audio",
+            description="Initial description",
+            media_type="audio",
+            file=self.audio_file,
+        )
+
+    def tearDown(self):
+        AudioTranscriptionService.reset_model()
+
+    def test_transcribe_unauthenticated_rejected(self):
+        """Test that unauthenticated requests to /api/media/{id}/transcribe/ are rejected with HTTP 401"""
+        self.client.force_authenticate(user=None)
+        response = self.client.post(f"/api/media/{self.audio_media.id}/transcribe/")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_transcribe_another_user_media_rejected(self):
+        """Test that an authenticated user cannot transcribe media belonging to another user (HTTP 404)"""
+        other_audio_file = SimpleUploadedFile(
+            "other.mp3", VALID_AUDIO_MP3_BYTES, content_type="audio/mpeg"
+        )
+        other_media = Media.objects.create(
+            user=self.other_user,
+            title="Other's Audio",
+            media_type="audio",
+            file=other_audio_file,
+        )
+        response = self.client.post(f"/api/media/{other_media.id}/transcribe/")
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_transcribe_non_audio_media_rejected(self):
+        """Test that attempting to transcribe an image or non-audio media returns HTTP 400"""
+        image_file = SimpleUploadedFile(
+            "photo.jpg", VALID_JPEG_BYTES, content_type="image/jpeg"
+        )
+        image_media = Media.objects.create(
+            user=self.user,
+            title="Photo",
+            media_type="image",
+            file=image_file,
+        )
+        response = self.client.post(f"/api/media/{image_media.id}/transcribe/")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "invalid_media_type")
+
+    def test_transcribe_missing_package_returns_503(self):
+        """
+        Test that when faster_whisper is not installed in the environment,
+        the endpoint returns HTTP 503 Service Unavailable with a clean message.
+        """
+        response = self.client.post(f"/api/media/{self.audio_media.id}/transcribe/")
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertEqual(response.data["code"], "service_unavailable")
+        self.assertIn("faster-whisper", response.data["error"])
+
+    @patch("apps.media.services.AudioTranscriptionService.get_model")
+    def test_transcribe_success_mocked(self, mock_get_model):
+        """
+        Test successful transcription with mocked model returning text, language, and duration.
+        Ensures no real model is downloaded and inference segments are consumed.
+        """
+        mock_model = MagicMock()
+        mock_segment1 = MagicMock()
+        mock_segment1.text = "Bonjour tout le monde."
+        mock_segment1.end = 2.5
+
+        mock_segment2 = MagicMock()
+        mock_segment2.text = "Ceci est un test de transcription."
+        mock_segment2.end = 5.8
+
+        mock_info = MagicMock()
+        mock_info.language = "fr"
+        mock_info.duration = 5.8
+
+        mock_model.transcribe.return_value = ([mock_segment1, mock_segment2], mock_info)
+        mock_get_model.return_value = mock_model
+
+        response = self.client.post(f"/api/media/{self.audio_media.id}/transcribe/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["text"],
+            "Bonjour tout le monde. Ceci est un test de transcription.",
+        )
+        self.assertEqual(response.data["language"], "fr")
+        self.assertEqual(response.data["duration"], 5.8)
+        self.assertEqual(response.data["id"], str(self.audio_media.id))
+        self.assertIn("model", response.data)
+
+    @patch("apps.media.services.AudioTranscriptionService.get_model")
+    def test_transcribe_does_not_modify_media_description(self, mock_get_model):
+        """
+        Test that running a transcription does NOT automatically overwrite
+        media.description in the database, preserving user control.
+        """
+        mock_model = MagicMock()
+        mock_segment = MagicMock()
+        mock_segment.text = "Transcription générée."
+        mock_segment.end = 3.0
+        mock_info = MagicMock(language="fr", duration=3.0)
+
+        mock_model.transcribe.return_value = ([mock_segment], mock_info)
+        mock_get_model.return_value = mock_model
+
+        response = self.client.post(f"/api/media/{self.audio_media.id}/transcribe/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        # Refresh media from DB and assert description was not modified
+        self.audio_media.refresh_from_db()
+        self.assertEqual(self.audio_media.description, "Initial description")
+
+    @patch("apps.media.services.AudioTranscriptionService.get_model")
+    def test_transcribe_no_speech_detected_returns_422(self, mock_get_model):
+        """Test that if the model finds no audible speech, HTTP 422 is returned"""
+        mock_model = MagicMock()
+        mock_info = MagicMock(language="fr", duration=4.0)
+        # Empty segments generator
+        mock_model.transcribe.return_value = ([], mock_info)
+        mock_get_model.return_value = mock_model
+
+        response = self.client.post(f"/api/media/{self.audio_media.id}/transcribe/")
+        self.assertEqual(response.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+        self.assertEqual(response.data["code"], "no_speech_detected")
+
+    @patch("apps.media.services.AudioTranscriptionService.get_model")
+    def test_transcribe_engine_error_returns_503(self, mock_get_model):
+        """Test that when the model raises an error during transcription, HTTP 503 is returned"""
+        mock_model = MagicMock()
+        mock_model.transcribe.side_effect = RuntimeError("Transcribe CTranslate2 crashed")
+        mock_get_model.return_value = mock_model
+
+        response = self.client.post(f"/api/media/{self.audio_media.id}/transcribe/")
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertEqual(response.data["code"], "transcription_error")
+
+    def test_transcribe_empty_file_rejected(self):
+        """Test that empty audio file (0 bytes) returns HTTP 400"""
+        empty_file = SimpleUploadedFile("empty.mp3", b"", content_type="audio/mpeg")
+        media = Media.objects.create(
+            user=self.user,
+            title="Empty",
+            media_type="audio",
+            file=empty_file,
+        )
+        response = self.client.post(f"/api/media/{media.id}/transcribe/")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "invalid_audio")

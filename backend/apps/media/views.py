@@ -1,13 +1,24 @@
 import logging
 from django.db import transaction
 from django.core.files.storage import default_storage
-from rest_framework import viewsets
+from rest_framework import status, viewsets
+from rest_framework.decorators import action
+from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 from .models import Media
 from .serializers import MediaSerializer
+from .services import (
+    AudioTranscriptionService,
+    AudioTranscriptionError,
+    AudioTranscriptionUnavailableError,
+    AudioTranscriptionBusyError,
+    AudioFileNotFoundError,
+    InvalidAudioFileError,
+    NoSpeechDetectedError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,3 +90,78 @@ class MediaViewSet(viewsets.ModelViewSet):
                         )
 
                 transaction.on_commit(cleanup_file)
+
+    @action(detail=True, methods=["post"], url_path="transcribe")
+    def transcribe(self, request, pk=None):
+        """
+        Transcribe an existing audio media file.
+        POST /api/media/{id}/transcribe/
+        Protected by JWT authentication and user ownership isolation.
+        Does NOT automatically overwrite media.description.
+        """
+        media = self.get_object()
+
+        if media.media_type != "audio":
+            return Response(
+                {
+                    "error": "Seuls les fichiers de type audio peuvent être transcrits.",
+                    "code": "invalid_media_type",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not media.file:
+            return Response(
+                {
+                    "error": "Aucun fichier audio n'est rattaché à ce média.",
+                    "code": "missing_file",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            result = AudioTranscriptionService.transcribe_media(media)
+            return Response(
+                {
+                    "id": str(media.id),
+                    "text": result["text"],
+                    "language": result["language"],
+                    "duration": result["duration"],
+                    "model": result["model"],
+                },
+                status=status.HTTP_200_OK,
+            )
+        except AudioTranscriptionUnavailableError as exc:
+            return Response(
+                {"error": str(exc), "code": "service_unavailable"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except AudioTranscriptionBusyError as exc:
+            return Response(
+                {"error": str(exc), "code": "service_busy"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except AudioFileNotFoundError as exc:
+            return Response(
+                {"error": str(exc), "code": "file_not_found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except InvalidAudioFileError as exc:
+            return Response(
+                {"error": str(exc), "code": "invalid_audio"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except NoSpeechDetectedError as exc:
+            return Response(
+                {"error": str(exc), "code": "no_speech_detected"},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+        except AudioTranscriptionError as exc:
+            logger.error("Audio transcription error on media %s: %s", media.id, exc)
+            return Response(
+                {
+                    "error": "La transcription a échoué en raison d'une erreur interne.",
+                    "code": "transcription_error",
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
