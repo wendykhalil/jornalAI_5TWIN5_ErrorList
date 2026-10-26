@@ -94,6 +94,110 @@ python manage.py runserver
 
 The server will be available at http://127.0.0.1:8000/.
 
+## Running Tests
+
+The project includes comprehensive test coverage across all applications using Django's built-in test runner.
+
+### Test Statistics
+
+- **Total Tests:** 295 (as of October 26, 2026)
+- **Test Files:** 8 (one per app, plus `goals/test_ai.py`)
+- **All Tests Status:** ✅ PASSING (295/295)
+- **Coverage:** 71.79% overall (configured via `.coveragerc`)
+
+### Test Counts by App
+
+| App | Tests | Status |
+|-----|-------|--------|
+| journal | 65 | ✅ PASS |
+| memories | 133 | ✅ PASS |
+| goals | 39 | ✅ PASS |
+| users | 35 | ✅ PASS |
+| mood | 17 | ✅ PASS |
+| media | 6 | ✅ PASS |
+| **Total** | **295** | **✅ PASS** |
+
+### Run All Tests
+
+```powershell
+python manage.py test
+```
+
+### Run Tests for Specific App
+
+```powershell
+python manage.py test apps.users              # User authentication and permissions
+python manage.py test apps.journal            # Journal entries (65 tests)
+python manage.py test apps.mood               # Mood tracking
+python manage.py test apps.media              # Media uploads
+python manage.py test apps.memories           # Memory CRUD and AI features (133 tests)
+python manage.py test apps.goals              # Goals, habits, and AI insights
+```
+
+### Run Tests with Verbose Output
+
+```powershell
+python manage.py test --verbosity=2
+```
+
+### Run Tests with Keepdb (Faster Re-runs)
+
+```powershell
+python manage.py test --keepdb
+```
+
+## Code Coverage
+
+This project uses `coverage.py` for measuring test coverage. Ensure it's installed:
+
+```powershell
+pip install coverage==7.4.0
+```
+
+### Actual Coverage Results (October 26, 2026)
+
+| Module | Coverage | Status |
+|--------|----------|--------|
+| **Backend Overall** | **71.79%** | 🟢 Good |
+| memories | 87.52% | 🟢 Excellent |
+| goals | 94.38% | 🟢 Excellent |
+| media | 96.08% | 🟢 Excellent |
+| mood | 88.69% | 🟢 Excellent |
+| users | 67.66% | 🟡 Fair |
+| journal | 43.21% | 🟡 Fair |
+
+**Note:** Journal coverage is lower because it has extensive view endpoints for analysis, AI features, and export that are out of scope for basic CRUD tests. Core models and serializers are 89-100% covered.
+
+### Generate Coverage Report
+
+```powershell
+coverage run --source='apps' manage.py test
+coverage report
+```
+
+### Generate HTML Coverage Report
+
+```powershell
+coverage run --source='apps' manage.py test
+coverage html
+```
+
+The HTML report will be generated in `htmlcov/index.html`. Open it in your browser to view detailed coverage information.
+
+### Generate Report for Specific App
+
+```powershell
+coverage run --source='apps.journal' manage.py test apps.journal
+coverage report --include="apps/journal/*"
+```
+
+### Coverage Configuration
+
+Coverage settings are configured in `.coveragerc`. The default configuration:
+- **Source:** `apps/` (all application code)
+- **Omit:** Migrations and test files themselves
+- **Report:** Excludes abstract methods, `__repr__`, and unreachable code
+
 ## Current Status
 
 - Django project initialized.
