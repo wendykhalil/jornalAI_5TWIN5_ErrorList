@@ -1,6 +1,9 @@
+from unittest.mock import patch
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.files.storage import default_storage
+from django.db import transaction
 from rest_framework.test import APITestCase
 from rest_framework import status
 from apps.media.models import Media
@@ -335,9 +338,9 @@ class MediaAPITest(APITestCase):
         self.assertEqual(linked_photo.title, "Journal Attachment")
         self.assertEqual(linked_photo.journal_entries.first(), entry)
 
-    # 12. Suppression existante sans régression
+    # 12. Tests de suppression sécurisée et gestion des fichiers physiques
     def test_delete_media(self):
-        """Test deleting media works as expected"""
+        """Test deleting media works as expected and cleans up physical file"""
         file = SimpleUploadedFile(
             "to_delete.jpg", VALID_JPEG_BYTES, content_type="image/jpeg"
         )
@@ -347,6 +350,174 @@ class MediaAPITest(APITestCase):
             media_type="image",
             file=file,
         )
-        response = self.client.delete(f"/api/media/{media.id}/")
+        file_name = media.file.name
+        self.assertTrue(default_storage.exists(file_name))
+
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.delete(f"/api/media/{media.id}/")
+
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.assertFalse(Media.objects.filter(id=media.id).exists())
+        self.assertFalse(default_storage.exists(file_name))
+
+    def test_reject_delete_by_another_user(self):
+        """Test that a user cannot delete another user's media, preserving the physical file"""
+        other_user = User.objects.create_user(
+            username="otheruser2", email="other2@example.com", password="testpass123"
+        )
+        file = SimpleUploadedFile(
+            "other_protected.jpg", VALID_JPEG_BYTES, content_type="image/jpeg"
+        )
+        other_media = Media.objects.create(
+            user=other_user,
+            title="Other Protected Image",
+            media_type="image",
+            file=file,
+        )
+        file_name = other_media.file.name
+        self.assertTrue(default_storage.exists(file_name))
+
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.delete(f"/api/media/{other_media.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(Media.objects.filter(id=other_media.id).exists())
+        self.assertTrue(default_storage.exists(file_name))
+        # Cleanup
+        default_storage.delete(file_name)
+
+    def test_delete_media_preserves_shared_physical_file(self):
+        """Test that if another Media instance references the same file, the physical file is not deleted"""
+        file = SimpleUploadedFile(
+            "shared_file.jpg", VALID_JPEG_BYTES, content_type="image/jpeg"
+        )
+        media1 = Media.objects.create(
+            user=self.user,
+            title="Media 1",
+            media_type="image",
+            file=file,
+        )
+        file_name = media1.file.name
+        # Create media2 referencing the same file on disk
+        media2 = Media.objects.create(
+            user=self.user,
+            title="Media 2",
+            media_type="image",
+            file=file_name,
+        )
+        self.assertTrue(default_storage.exists(file_name))
+
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.delete(f"/api/media/{media1.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Media.objects.filter(id=media1.id).exists())
+        self.assertTrue(Media.objects.filter(id=media2.id).exists())
+        # The file on disk must STILL exist because media2 references it
+        self.assertTrue(default_storage.exists(file_name))
+
+        # Now delete media2 as well
+        with self.captureOnCommitCallbacks(execute=True):
+            response2 = self.client.delete(f"/api/media/{media2.id}/")
+        self.assertEqual(response2.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Media.objects.filter(id=media2.id).exists())
+        # Now no Media instance references it, so it should be deleted
+        self.assertFalse(default_storage.exists(file_name))
+
+    def test_delete_media_linked_to_journal_entry(self):
+        """Test that deleting a media linked to a JournalEntry cleans up the file and removes the M2M link without breaking the journal entry"""
+        file = SimpleUploadedFile(
+            "entry_photo.jpg", VALID_JPEG_BYTES, content_type="image/jpeg"
+        )
+        media = Media.objects.create(
+            user=self.user,
+            title="Entry Photo",
+            media_type="image",
+            file=file,
+        )
+        file_name = media.file.name
+        journal_entry = JournalEntry.objects.create(
+            user=self.user,
+            title="My Diary Entry",
+            content="Journal content with photo",
+            date="2026-10-26",
+            mood="Calme",
+        )
+        journal_entry.images.add(media)
+        self.assertEqual(journal_entry.images.count(), 1)
+        self.assertTrue(default_storage.exists(file_name))
+
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.delete(f"/api/media/{media.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Media.objects.filter(id=media.id).exists())
+        self.assertFalse(default_storage.exists(file_name))
+
+        # Journal entry must be intact and unharmed
+        journal_entry.refresh_from_db()
+        self.assertEqual(journal_entry.title, "My Diary Entry")
+        self.assertEqual(journal_entry.content, "Journal content with photo")
+        self.assertEqual(journal_entry.images.count(), 0)
+
+    def test_transaction_rollback_prevents_premature_file_cleanup(self):
+        """Test that if a transaction rolls back, physical file is NOT deleted"""
+        file = SimpleUploadedFile(
+            "rollback_test.jpg", VALID_JPEG_BYTES, content_type="image/jpeg"
+        )
+        media = Media.objects.create(
+            user=self.user,
+            title="Rollback Image",
+            media_type="image",
+            file=file,
+        )
+        file_name = media.file.name
+        self.assertTrue(default_storage.exists(file_name))
+
+        # Simulate a transaction failure during deletion flow
+        executed_callbacks = []
+        try:
+            with transaction.atomic():
+                transaction.on_commit(lambda: executed_callbacks.append(True))
+                # Simulate an unexpected database error triggering rollback
+                raise RuntimeError("Simulated DB failure triggering rollback")
+        except RuntimeError:
+            pass
+
+        # Since transaction rolled back, callback was not executed
+        self.assertEqual(executed_callbacks, [])
+        self.assertTrue(default_storage.exists(file_name))
+
+        # Cleanup
+        default_storage.delete(file_name)
+
+    @patch("django.core.files.storage.FileSystemStorage.delete")
+    def test_storage_error_does_not_affect_other_media(self, mock_delete):
+        """Test that a storage error during file deletion does not crash or affect other media"""
+        mock_delete.side_effect = OSError("Simulated filesystem I/O error")
+
+        file1 = SimpleUploadedFile(
+            "f1.jpg", VALID_JPEG_BYTES, content_type="image/jpeg"
+        )
+        media1 = Media.objects.create(
+            user=self.user,
+            title="Media 1",
+            media_type="image",
+            file=file1,
+        )
+        file2 = SimpleUploadedFile(
+            "f2.jpg", VALID_JPEG_BYTES, content_type="image/jpeg"
+        )
+        media2 = Media.objects.create(
+            user=self.user,
+            title="Media 2",
+            media_type="image",
+            file=file2,
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.delete(f"/api/media/{media1.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Media.objects.filter(id=media1.id).exists())
+        self.assertTrue(Media.objects.filter(id=media2.id).exists())
