@@ -69,6 +69,11 @@ class Memory(models.Model):
     
     ai_summary = models.TextField(blank=True, null=True)
     
+    draft = models.BooleanField(
+        default=False,
+        help_text="If True, memory is a draft; if False, memory is published."
+    )
+    
     related_journal_entry = models.ForeignKey(
         "journal.JournalEntry",
         on_delete=models.SET_NULL,

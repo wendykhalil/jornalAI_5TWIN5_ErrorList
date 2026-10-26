@@ -39,6 +39,7 @@ import {
 import { categories, categoryColors } from "../../data/mockData"
 import { memoryService } from "../../services/memoryService"
 import { useStore } from "../../store/AppStore"
+import { useAutoSave, loadFromLocalStorage, clearFromLocalStorage } from "../../hooks/useAutoSave"
 import {
   Badge,
   Button,
@@ -74,12 +75,28 @@ const monthNames = [
   "Novembre",
   "Décembre",
 ]
-const fmt = (d) =>
-  new Intl.DateTimeFormat("fr-FR", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  }).format(new Date(`${d}T12:00:00`))
+const fmt = (d) => {
+  // Defensive date formatting: handle missing, null, empty, or invalid dates
+  if (!d || d === "" || d === null) {
+    return "Date inconnue"
+  }
+  
+  try {
+    const dateObj = new Date(`${d}T12:00:00`)
+    // Check if date is valid
+    if (isNaN(dateObj.getTime())) {
+      return "Date inconnue"
+    }
+    return new Intl.DateTimeFormat("fr-FR", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    }).format(dateObj)
+  } catch (error) {
+    // If any error occurs during formatting, return fallback
+    return "Date inconnue"
+  }
+}
 
 function MemoryCard({ memory, view = "grid", onDelete }) {
   return (
@@ -131,7 +148,7 @@ function MemoryCard({ memory, view = "grid", onDelete }) {
                   : "text-slate-300"
               }
             />
-            {memory.importance.includes("high") && (
+            {(memory.importance === "high" || memory.importance === "very-high") && (
               <span className="text-xs font-bold text-amber-600">
                 Important
               </span>
@@ -264,7 +281,7 @@ export function MemoriesList() {
         />
         <Stat
           label="Souvenirs importants"
-          value={memories.filter((x) => x.importance.includes("high")).length}
+          value={memories.filter((x) => x.importance === "high" || x.importance === "very-high").length}
         />
         <Stat
           label="Catégories utilisées"
@@ -398,7 +415,7 @@ export function MemoriesList() {
 
 function MemoryForm({ edit = false }) {
   const { id } = useParams(),
-    { memories, media, createMemory, updateMemory, notify } = useStore(),
+    { memories, media, createMemory, updateMemory, notify, user } = useStore(),
     nav = useNavigate(),
     [params] = useSearchParams()
   const existing = memories.find((x) => x.id === id)
@@ -415,6 +432,7 @@ function MemoryForm({ edit = false }) {
           mediaIds: [],
           cover: null,
           favorite: false,
+          draft: false,
           aiSummary: "",
         },
     ),
@@ -422,29 +440,72 @@ function MemoryForm({ edit = false }) {
     [preview, setPreview] = useState(false),
     [ai, setAi] = useState({
       status: "idle",
+      error: null,
       category: null,
+      categoryConfidence: null,
+      categoryReasoning: null,
       tags: [],
+      tagsConfidence: null,
       analysis: "",
     })
+  
+  // Auto-save hook
+  const { draftId, saveStatus, clearAutoSave } = useAutoSave(form, {
+    debounceMs: 1000,
+    userId: user?.id,
+    media,
+    enabled: !edit, // Only auto-save when creating new memories
+  })
   useEffect(() => {
     if (edit && existing) setForm(existing)
   }, [existing, edit])
+
+  // Fetch memory from backend if not found in AppStore state (race condition fix)
+  useEffect(() => {
+    if (edit && id && !existing) {
+      const loadMemory = async () => {
+        try {
+          const memory = await memoryService.getMemoryById(id, media)
+          if (memory) {
+            setForm(memory)
+          }
+        } catch (err) {
+          console.error("Failed to load memory:", err)
+          setError("Impossible de charger le souvenir. Réessayez.")
+        }
+      }
+      loadMemory()
+    }
+  }, [edit, id, existing, media])
   const change = (k, v) => setForm((f) => ({ ...f, [k]: v }))
   const runAi = async (type) => {
-    setAi((a) => ({ ...a, status: "loading" }))
+    setAi((a) => ({ ...a, status: "loading", error: null }))
     try {
       const text = `${form.title} ${form.description}`
       if (type === "category") {
-        const value = await memoryService.suggestMemoryCategory(text)
-        setAi((a) => ({ ...a, status: "success", category: value }))
+        const response = await memoryService.suggestMemoryCategory(text)
+        // Extract suggested_category from response object
+        setAi((a) => ({ 
+          ...a, 
+          status: "success", 
+          category: response.suggested_category,
+          categoryConfidence: response.confidence,
+          categoryReasoning: response.reasoning,
+        }))
       } else if (type === "tags") {
-        const value = await memoryService.suggestMemoryTags(text)
+        const response = await memoryService.suggestMemoryTags(form.title, form.description)
+        // Extract suggested_tags array from response object
+        const tags = response.suggested_tags && response.suggested_tags.length 
+          ? response.suggested_tags 
+          : ["souvenir", "moment"]
         setAi((a) => ({
           ...a,
           status: "success",
-          tags: value.length ? value : ["souvenir", "moment"],
+          tags,
+          tagsConfidence: response.confidence,
         }))
-      } else
+      } else if (type === "analysis") {
+        // Mock analysis (not yet AI-powered)
         setTimeout(
           () =>
             setAi((a) => ({
@@ -455,22 +516,50 @@ function MemoryForm({ edit = false }) {
             })),
           650,
         )
-    } catch {
-      setAi((a) => ({ ...a, status: "error" }))
+      }
+    } catch (err) {
+      setAi((a) => ({ 
+        ...a, 
+        status: "error",
+        error: err.message || "Une erreur est survenue. Réessayez."
+      }))
     }
   }
   const save = async (draft = false) => {
-    if (!form.title.trim() || !form.description.trim() || !form.eventDate) {
+    // For published memories (draft=false), validate required fields
+    if (!draft && (!form.title.trim() || !form.description.trim() || !form.eventDate)) {
       setError(
         "Le titre, la description et la date de l’événement sont obligatoires.",
       )
       return
     }
-    const item = edit
-      ? await updateMemory(id, form)
-      : await createMemory(form)
-    notify(draft ? "Brouillon enregistré" : "Souvenir enregistré avec succès")
-    nav(`/memories/${item.id}`)
+    
+    // Update form with draft status before saving
+    const formToSave = { ...form, draft }
+    
+    try {
+      let item
+      if (edit) {
+        // Editing existing memory
+        item = await updateMemory(id, formToSave)
+      } else if (draftId) {
+        // Publishing an auto-saved draft
+        item = await updateMemory(draftId, formToSave)
+      } else {
+        // Creating new memory
+        item = await createMemory(formToSave)
+      }
+      
+      // Clear auto-save after successful save
+      if (!draft) {
+        clearAutoSave()
+      }
+      
+      notify(draft ? "Brouillon enregistré" : "Souvenir enregistré avec succès")
+      nav(`/memories/${item.id}`)
+    } catch (err) {
+      setError(err.message || "Une erreur est survenue. Réessayez.")
+    }
   }
   const toggleMedia = (id) => {
     const mediaIds = form.mediaIds.includes(id)
@@ -620,6 +709,17 @@ function MemoryForm({ edit = false }) {
               {error}
             </p>
           )}
+          {saveStatus && saveStatus !== "idle" && (
+            <p className={`rounded-xl p-3 text-sm ${
+              saveStatus === "saving" ? "bg-blue-50 text-blue-700" :
+              saveStatus === "saved" ? "bg-green-50 text-green-700" :
+              saveStatus === "failed" ? "bg-red-50 text-red-700" : ""
+            }`}>
+              {saveStatus === "saving" && "Modifications en cours…"}
+              {saveStatus === "saved" && "Brouillon enregistré"}
+              {saveStatus === "failed" && "Échec de l'enregistrement — Réessayer"}
+            </p>
+          )}
           <div className="flex flex-wrap gap-2">
             <Button onClick={() => save(false)}>Enregistrer le souvenir</Button>
             <Button variant="secondary" onClick={() => save(true)}>
@@ -668,8 +768,8 @@ function MemoryForm({ edit = false }) {
             <Loading label="L’assistant réfléchit..." />
           )}
           {ai.status === "error" && (
-            <p className="mt-4 text-sm text-red-600">
-              La simulation a rencontré une erreur. Réessayez.
+            <p className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+              {ai.error || "Une erreur est survenue. Réessayez."}
             </p>
           )}
           {ai.category && (
@@ -677,7 +777,7 @@ function MemoryForm({ edit = false }) {
               label="Catégorie suggérée"
               value={ai.category}
               onAccept={() => change("category", ai.category)}
-              onDismiss={() => setAi({ ...ai, category: null })}
+              onDismiss={() => setAi({ ...ai, category: null, categoryConfidence: null, categoryReasoning: null })}
             />
           )}{" "}
           {!!ai.tags.length && (
@@ -687,7 +787,7 @@ function MemoryForm({ edit = false }) {
               onAccept={() =>
                 change("tags", [...new Set([...form.tags, ...ai.tags])])
               }
-              onDismiss={() => setAi({ ...ai, tags: [] })}
+              onDismiss={() => setAi({ ...ai, tags: [], tagsConfidence: null })}
             />
           )}{" "}
           {ai.analysis && (
@@ -749,11 +849,68 @@ export function MemoryDetail() {
     nav = useNavigate(),
     [pending, setPending] = useState(false),
     [similar, setSimilar] = useState([]),
-    [summary, setSummary] = useState("")
+    [summary, setSummary] = useState(""),
+    [summaryLoading, setSummaryLoading] = useState(false),
+    [summarySaving, setSummarySaving] = useState(false),
+    [summaryError, setSummaryError] = useState("")
+  
   const m = memories.find((x) => x.id === id)
+  
   useEffect(() => {
-    if (id) memoryService.getSimilarMemories(id).then(setSimilar)
+    if (id) {
+      memoryService.getSimilarMemories(id, memories)
+        .then(setSimilar)
+        .catch((error) => {
+          console.error('[MemoryDetail] Error fetching similar memories:', error)
+          setSimilar([]) // Treat errors as no results (prevent crashes)
+        })
+    }
   }, [id, memories])
+  
+  // Generate summary via real AI
+  const generateSummary = async () => {
+    if (!m) return
+    
+    setSummaryLoading(true)
+    setSummaryError("")
+    
+    try {
+      const result = await memoryService.generateMemorySummary(
+        m.title,
+        m.description,
+        m.category,
+        m.tags,
+        m.location
+      )
+      setSummary(result.summary)
+    } catch (error) {
+      setSummaryError(error.message || "Erreur lors de la génération du résumé")
+      console.error("Summary generation error:", error)
+    } finally {
+      setSummaryLoading(false)
+    }
+  }
+
+  // Save generated summary to memory
+  const saveSummary = async () => {
+    if (!m || !summary) return
+
+    setSummarySaving(true)
+    setSummaryError("")
+
+    try {
+      await memoryService.saveMemorySummary(m.id, summary)
+      // Refresh memory from store to display saved summary
+      notify("Résumé enregistré avec succès")
+      setSummary("") // Clear local state; will load from m.aiSummary
+    } catch (error) {
+      setSummaryError(error.message || "Erreur lors de l'enregistrement du résumé")
+      console.error("Summary save error:", error)
+    } finally {
+      setSummarySaving(false)
+    }
+  }
+  
   if (!m) return <Loading label="Chargement du souvenir..." />
   const linked = media.filter((x) => m.mediaIds.includes(x.id))
   const remove = async () => {
@@ -890,17 +1047,28 @@ export function MemoryDetail() {
               title="Souvenirs similaires"
               subtitle="Selon les catégories, lieux et tags partagés"
             />
-            <div className="grid gap-4 md:grid-cols-2">
-              {similar.map((x) => (
-                <MemoryCard key={x.id} memory={x} onDelete={() => {}} />
-              ))}
-            </div>
+            {similar.length > 0 ? (
+              <div className="grid gap-4 md:grid-cols-2">
+                {similar.map((x) => (
+                  <MemoryCard key={x.id} memory={x} onDelete={() => {}} />
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center">
+                <p className="text-sm font-medium text-slate-700">
+                  Aucun souvenir similaire trouvé pour le moment.
+                </p>
+                <p className="mt-2 text-xs text-slate-500">
+                  Ajoutez d'autres souvenirs pour découvrir des liens entre vos expériences.
+                </p>
+              </div>
+            )}
           </div>
         </div>
         <div className="space-y-5">
           <Card className="p-5">
             <Badge className="bg-cyan-50 text-cyan-700">
-              <Sparkles size={13} className="mr-1" /> Résumé simulé
+              <Sparkles size={13} className="mr-1" /> Résumé IA
             </Badge>
             <h2 className="mt-4 font-extrabold">Résumé du souvenir</h2>
             <p className="mt-2 text-sm leading-6 text-slate-600">
@@ -909,19 +1077,36 @@ export function MemoryDetail() {
             <Button
               variant="ai"
               className="mt-4 w-full"
-              onClick={() =>
-                setTimeout(
-                  () =>
-                    setSummary(
-                      `Un souvenir ${m.category.toLowerCase()} vécu à ${m.location || "un lieu important"}, marqué par ${m.tags.slice(0, 2).join(" et ")}.`,
-                    ),
-                  550,
-                )
-              }
+              onClick={generateSummary}
+              disabled={summaryLoading || summarySaving}
             >
               <RefreshCw size={16} />
-              {summary || m.aiSummary ? "Régénérer" : "Générer"}
+              {summaryLoading ? "Génération..." : summary || m.aiSummary ? "Régénérer" : "Générer"}
             </Button>
+
+            {/* Show unsaved indicator */}
+            {summary && !m.aiSummary && (
+              <p className="mt-2 text-xs text-amber-600">
+                ⚠️ Ce résumé n'est pas encore enregistré. Il sera perdu si vous quittez la page.
+              </p>
+            )}
+
+            {/* Save button (only show if summary generated but not yet saved) */}
+            {summary && !m.aiSummary && (
+              <Button
+                variant="secondary"
+                className="mt-2 w-full"
+                onClick={saveSummary}
+                disabled={summarySaving || !summary}
+              >
+                {summarySaving ? "Enregistrement..." : "Enregistrer le résumé"}
+              </Button>
+            )}
+
+            {/* Error message */}
+            {summaryError && (
+              <p className="mt-2 text-sm text-red-600">{summaryError}</p>
+            )}
           </Card>
           <Card className="p-5">
             <h2 className="font-extrabold">Suggestions IA</h2>
@@ -1196,21 +1381,51 @@ export function MemoryCalendar() {
 export function MemoryInsights() {
   const { memories, notify } = useStore(),
     [period, setPeriod] = useState("year"),
-    [start, setStart] = useState("2025-01-01"),
-    [end, setEnd] = useState("2025-12-31"),
+    [customStart, setCustomStart] = useState("2026-01-01"),
+    [customEnd, setCustomEnd] = useState("2026-12-31"),
     [loading, setLoading] = useState(false),
     [result, setResult] = useState(null),
     [saved, setSaved] = useState(() =>
       JSON.parse(localStorage.getItem("mindlog_summaries") || "[]"),
     )
-  const range =
-    period === "month"
-      ? ["2026-02-01", "2026-02-28"]
-      : period === "year"
-        ? ["2025-01-01", "2025-12-31"]
-        : [start, end]
+
+  // Helper: Get current year range
+  const getCurrentYearRange = () => {
+    const now = new Date()
+    const year = now.getFullYear()
+    return [`${year}-01-01`, `${year}-12-31`]
+  }
+
+  // Helper: Get current month range
+  const getCurrentMonthRange = () => {
+    const now = new Date()
+    const year = now.getFullYear()
+    const month = String(now.getMonth() + 1).padStart(2, "0")
+    const lastDay = new Date(year, now.getMonth() + 1, 0).getDate()
+    return [`${year}-${month}-01`, `${year}-${month}-${lastDay}`]
+  }
+
+  // Determine the current effective date range based on period selection
+  const getEffectiveRange = () => {
+    if (period === "month") {
+      return getCurrentMonthRange()
+    } else if (period === "year") {
+      return getCurrentYearRange()
+    } else {
+      // custom period
+      return [customStart, customEnd]
+    }
+  }
+
+  const range = getEffectiveRange()
+
+  // Clear result whenever period or custom dates change
+  useEffect(() => {
+    setResult(null)
+  }, [period, customStart, customEnd])
+
   const items = memories.filter(
-    (x) => x.eventDate >= range[0] && x.eventDate <= range[1],
+    (x) => x.eventDate >= range[0] && x.eventDate <= range[1] && !x.draft,
   )
   const counts = Object.entries(
     items.reduce(
@@ -1225,36 +1440,51 @@ export function MemoryInsights() {
   )
     .sort((a, b) => b[1] - a[1])
     .slice(0, 8)
-  const generate = () => {
+  const generate = async () => {
     if (range[0] > range[1]) {
       notify("La date de début doit précéder la date de fin.", "error")
       return
     }
     setLoading(true)
-    setTimeout(() => {
-      const top =
-        counts.sort((a, b) => b.value - a.value)[0]?.name ||
-        "moments personnels"
-      const titles = items.slice(0, 3).map((x) => x.title)
-      const text = items.length
-        ? `Sur cette période, vous avez conservé ${items.length} souvenir${
-            items.length > 1 ? "s" : ""
-          }, principalement autour de ${top.toLowerCase()}. Vous avez notamment enregistré ${titles.join(", ")}. Ces moments reflètent les expériences que vous avez choisi de préserver.`
-        : "Aucun souvenir ne correspond à cette période. Choisissez une autre plage pour générer un résumé fidèle."
+    setResult(null) // Clear previous result when generating
+
+    try {
+      const currentRange = getEffectiveRange()
+      const currentItems = memories.filter(
+        (x) => x.eventDate >= currentRange[0] && x.eventDate <= currentRange[1] && !x.draft,
+      )
+
+      const response = await memoryService.generateInsights(
+        currentRange[0],
+        currentRange[1],
+        period,
+      )
+
       const out = {
         id: crypto.randomUUID(),
-        text,
-        start: range[0],
-        end: range[1],
-        memoryIds: items.map((x) => x.id),
+        text: response.summary,
+        start: currentRange[0],
+        end: currentRange[1],
+        memoryIds: currentItems.map((x) => x.id),
         createdAt: new Date().toISOString(),
+        model: response.model,
+        memoryCount: response.memory_count,
+        source: "ollama", // Mark as real Ollama-generated summary
       }
+
       setResult(out)
-      const next = [out, ...saved].slice(0, 5)
-      setSaved(next)
-      localStorage.setItem("mindlog_summaries", JSON.stringify(next))
+
+      // Only save to localStorage if there are memories found
+      if (currentItems.length > 0) {
+        const next = [out, ...saved].slice(0, 5)
+        setSaved(next)
+        localStorage.setItem("mindlog_summaries", JSON.stringify(next))
+      }
+    } catch (error) {
+      notify(error.message, "error")
+    } finally {
       setLoading(false)
-    }, 800)
+    }
   }
   return (
     <>
@@ -1273,7 +1503,7 @@ export function MemoryInsights() {
         <Stat label="Souvenirs enregistrés" value={memories.length} />
         <Stat
           label="Souvenirs importants"
-          value={memories.filter((x) => x.importance.includes("high")).length}
+          value={memories.filter((x) => x.importance === "high" || x.importance === "very-high").length}
         />
         <Stat
           label="Catégorie fréquente"
@@ -1306,14 +1536,14 @@ export function MemoryInsights() {
               <Input
                 label="Date de début"
                 type="date"
-                value={start}
-                onChange={(e) => setStart(e.target.value)}
+                value={customStart}
+                onChange={(e) => setCustomStart(e.target.value)}
               />
               <Input
                 label="Date de fin"
                 type="date"
-                value={end}
-                onChange={(e) => setEnd(e.target.value)}
+                value={customEnd}
+                onChange={(e) => setCustomEnd(e.target.value)}
               />
             </>
           )}
@@ -1323,15 +1553,20 @@ export function MemoryInsights() {
           </Button>
         </div>
         {loading && <Loading label="Analyse des souvenirs sélectionnés..." />}
-        {result && (
+        {result && items.length > 0 && (
           <div className="mt-6 rounded-2xl border border-cyan-200 bg-cyan-50 p-6">
-            <Badge className="bg-white text-cyan-700">Sortie IA simulée</Badge>
+            <div className="flex items-center gap-2">
+              <Badge className="bg-white text-cyan-700">Sortie IA</Badge>
+              {result.model && (
+                <span className="text-xs text-cyan-600">Modèle : {result.model}</span>
+              )}
+            </div>
             <p className="mt-4 text-base leading-8 text-cyan-950">
               {result.text}
             </p>
             <p className="mt-3 text-xs text-cyan-700">
               Période : {fmt(result.start)} — {fmt(result.end)} ·{" "}
-              {result.memoryIds.length} souvenir(s) utilisé(s)
+              {result.memoryCount || result.memoryIds.length} souvenir(s) utilisé(s)
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
               {items.map((x) => (
@@ -1340,8 +1575,22 @@ export function MemoryInsights() {
                 </Link>
               ))}
             </div>
-            <Button variant="ai" className="mt-4" onClick={generate}>
+            <Button variant="ai" className="mt-4" onClick={generate} disabled={loading}>
               <RefreshCw /> Régénérer
+            </Button>
+          </div>
+        )}
+        {result && items.length === 0 && (
+          <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-6">
+            <Badge className="bg-white text-amber-700">Aucun résultat</Badge>
+            <p className="mt-4 text-base leading-8 text-amber-950">
+              {result.text}
+            </p>
+            <p className="mt-3 text-xs text-amber-700">
+              Période : {fmt(result.start)} — {fmt(result.end)}
+            </p>
+            <Button variant="secondary" className="mt-4" onClick={generate}>
+              <RefreshCw /> Essayer une autre période
             </Button>
           </div>
         )}
@@ -1376,7 +1625,7 @@ export function MemoryInsights() {
           />
           <div className="space-y-2">
             {items
-              .filter((x) => x.importance.includes("high"))
+              .filter((x) => x.importance === "high" || x.importance === "very-high")
               .slice(0, 4)
               .map((x) => (
                 <Link
@@ -1403,7 +1652,14 @@ export function MemoryInsights() {
           <div className="space-y-3">
             {saved.map((x) => (
               <div key={x.id} className="rounded-xl bg-slate-50 p-4">
-                <p className="line-clamp-2 text-sm">{x.text}</p>
+                <div className="flex items-start justify-between gap-2">
+                  <p className="line-clamp-2 flex-1 text-sm">{x.text}</p>
+                  {!x.source && (
+                    <span className="whitespace-nowrap rounded bg-amber-100 px-2 py-1 text-xs text-amber-700">
+                      Simulé
+                    </span>
+                  )}
+                </div>
                 <p className="mt-2 text-xs text-slate-400">
                   {fmt(x.start)} — {fmt(x.end)}
                 </p>
@@ -1422,6 +1678,7 @@ export function MemorySearch() {
   const [query, setQuery] = useState(""),
     [results, setResults] = useState([]),
     [loading, setLoading] = useState(false),
+    [error, setError] = useState(null),
     [category, setCategory] = useState("Toutes")
   const examples = [
     "Mes souvenirs de vacances en été",
@@ -1431,18 +1688,16 @@ export function MemorySearch() {
   ]
   const search = async () => {
     setLoading(true)
-    let q = query
-      .toLowerCase()
-      .replace(/mes |les |souvenirs|moments|événements|de |en |liés à /g, " ")
-      .trim()
-    q = q
-      .replace("vacances", "Voyages")
-      .replace("été", "")
-      .replace("études", "Études")
-      .replace("amis", "Amis")
-    const r = await memoryService.searchMemories(q)
-    setResults(r)
-    setLoading(false)
+    setError(null)
+    try {
+      const response = await memoryService.intelligentSearch(query)
+      setResults(response.results || [])
+    } catch (err) {
+      setError(err.message)
+      setResults([])
+    } finally {
+      setLoading(false)
+    }
   }
   const shown = results.filter(
     (x) => category === "Toutes" || x.category === category,
@@ -1451,7 +1706,7 @@ export function MemorySearch() {
     <>
       <PageHeader
         title="Recherche intelligente"
-        subtitle="Recherche simulée par correspondance de mots, catégories, lieux et synonymes français."
+        subtitle="Recherche IA par compréhension du contexte, expansion de termes et scoring de pertinence."
       />
       <Card className="p-5">
         <div className="flex flex-col gap-3 sm:flex-row">
@@ -1484,6 +1739,11 @@ export function MemorySearch() {
             </button>
           ))}
         </div>
+        {error && (
+          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            {error}
+          </div>
+        )}
       </Card>
       <div className="mt-6 flex items-center justify-between">
         <p className="text-sm font-bold">
@@ -1502,20 +1762,22 @@ export function MemorySearch() {
         <Loading />
       ) : shown.length ? (
         <div className="mt-4 grid gap-4 md:grid-cols-2">
-          {shown.map((x, i) => (
+          {shown.map((x) => (
             <div key={x.id} className="relative">
               <MemoryCard memory={x} onDelete={() => {}} />
-              <Badge className="absolute right-3 top-3 bg-white text-violet-700 shadow">
-                Pertinence {96 - i * 7}%
-              </Badge>
+              {x.relevance_score !== undefined && (
+                <Badge className="absolute right-3 top-3 bg-white text-violet-700 shadow">
+                  Pertinence {Math.round(x.relevance_score * 100)}%
+                </Badge>
+              )}
             </div>
           ))}
         </div>
       ) : results.length === 0 && query ? (
         <div className="mt-5">
           <Empty
-            title="Aucun résultat pertinent"
-            text="Essayez un lieu, une catégorie ou un mot-clé différent."
+            title="Aucun résultat ne correspond à cette recherche"
+            text="Essayez un autre terme, un lieu ou une catégorie différente."
           />
         </div>
       ) : null}

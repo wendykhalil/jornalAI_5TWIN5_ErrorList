@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react"
+import { useMemo, useState, useEffect, useRef } from "react"
 import { mediaPhotoService } from "../../services/mediaPhotoService"
 import { Link, useNavigate, useParams } from "react-router"
 import {
@@ -21,8 +21,20 @@ import {
   Play,
   Users,
   Download,
+  Pin,
   Save,
   MessageCircle,
+  X,
+  AlertCircle,
+  Images,
+  FolderOpen,
+  Camera,
+  ArrowUpRight,
+  BookOpen,
+  ChevronRight,
+  SlidersHorizontal,
+  ChevronDown,
+  Clock3,
 } from "lucide-react"
 import {
   AreaChart,
@@ -39,13 +51,16 @@ import {
 } from "recharts"
 import { useStore } from "../../store/AppStore"
 import { journalService } from "../../services/journalService"
+import { moodService } from "../../services/moodService"
 import { journalVisionService } from "../../services/journalVisionService"
+import { journalWhisperService } from "../../services/journalWhisperService"
 import {
   Badge,
   Button,
   Card,
   Empty,
   Input,
+  Loading,
   Modal,
   PageHeader,
   SectionTitle,
@@ -53,6 +68,11 @@ import {
   Stat,
   Textarea,
 } from "../../components/ui"
+// Calm editorial design system: flat surfaces, precise borders, no heavy gradients.
+const actionPrimary = "inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-sm transition duration-200 hover:bg-slate-700 hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+const actionSecondary = "inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 shadow-sm transition duration-200 hover:border-slate-400 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+const actionSubtle = "inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:opacity-50"
+const actionDanger = "inline-flex items-center justify-center gap-1 rounded-lg border border-transparent bg-white/95 p-2 text-rose-600 shadow-sm transition hover:border-rose-200 hover:bg-rose-50 disabled:opacity-50"
 const moodColors = {
   Heureux: "#22c55e",
   Calme: "#22d3ee",
@@ -71,16 +91,16 @@ function JournalPhotos({ ids = [] }) {
     let active = true
     if (!ids.length) { setAttachments([]); return }
     mediaPhotoService.getAttachments()
-      .then((items) => { if (active) setAttachments(items.filter((m) => ids.includes(m.id))) })
+      .then((items) => { if (active) setAttachments(items.filter((m) => ids.some((id) => String(id) === String(m.id)))) })
       .catch(() => { if (active) setAttachments([]) })
     return () => { active = false }
   }, [key])
   if (!attachments.length) return null
   return <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
-    {attachments.map((file) => <div key={file.id} className="overflow-hidden rounded-xl border border-slate-100">
+    {attachments.map((file) => <div key={file.id} className="overflow-hidden rounded-2xl border border-slate-200 shadow-sm">
       {file.media_type === "video"
-        ? <video src={file.url || file.file} controls preload="metadata" className="aspect-square w-full bg-black object-contain" />
-        : <img src={file.url || file.file} alt={file.title} className="aspect-square w-full object-cover" />}
+        ? <video src={file.file_url || file.url || file.file} controls preload="metadata" className="aspect-square w-full bg-black object-contain" />
+        : <img src={file.file_url || file.url || file.file} alt={file.title} className="aspect-square w-full object-cover" />}
       {file.description && <p className="p-2 text-xs text-slate-600">{file.description}</p>}
     </div>)}
   </div>
@@ -88,6 +108,7 @@ function JournalPhotos({ ids = [] }) {
 
 function JournalVisionPanel({ images = [], busyId, error, result, onAnalyze }) {
   const [photos, setPhotos] = useState([])
+  const [selectedPhotoId, setSelectedPhotoId] = useState(null)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState("")
   const idsKey = JSON.stringify(images)
@@ -109,42 +130,111 @@ function JournalVisionPanel({ images = [], busyId, error, result, onAnalyze }) {
   }, [idsKey])
 
   if (!images.length) return null
+  const selectedPhoto = photos.find((p) => String(p.id) === String(selectedPhotoId)) || photos[0]
+  const activePhotoId = selectedPhoto?.id
   return (
-    <div className="mt-6 rounded-2xl border border-violet-200 bg-violet-50/60 p-5">
-      <div className="flex items-center gap-2">
-        <Sparkles size={19} className="text-violet-600" />
-        <h2 className="font-extrabold text-violet-900">Analyser une photo avec l'IA</h2>
+    <section className="mt-5 space-y-5" aria-label="Analyse visuelle du journal">
+      <div className="flex items-start gap-3">
+        <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-[#e4efff] text-blue-700"><Images size={21}/></span>
+        <div><h3 className="text-lg font-semibold tracking-tight text-slate-900">Explorer mes photos</h3><p className="mt-1 text-sm leading-6 text-slate-500">Choisissez un souvenir à analyser. Votre journal reste inchangé.</p></div>
       </div>
-      <p className="mt-1 text-xs text-violet-700">Choisissez une photo. L'analyse est facultative et ne modifie pas votre journal.</p>
-      {loading && <p className="mt-3 text-sm">Chargement des photos...</p>}
-      {loadError && <p role="alert" className="mt-3 text-sm text-red-600">{loadError}</p>}
-      {!loading && !loadError && photos.length === 0 && <p className="mt-3 text-sm text-slate-600">Aucune image compatible attachée à cette entrée.</p>}
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 md:grid-cols-3">
-        {photos.map((photo) => (
-          <div key={photo.id} className="overflow-hidden rounded-xl border border-violet-100 bg-white p-2">
-            <img src={photo.url || photo.file} alt={photo.title || "Photo du journal"} className="aspect-video w-full rounded-lg object-cover" />
-            <p className="mt-2 truncate text-xs font-semibold text-slate-700">{photo.title || "Photo"}</p>
-            <Button variant="ai" className="mt-2 w-full" disabled={Boolean(busyId)} onClick={() => onAnalyze(photo.id)}>
-              <Sparkles size={15} /> {String(busyId) === String(photo.id) ? "Analyse en cours..." : "Analyser cette photo"}
-            </Button>
+      {loading && <p role="status" className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">Chargement des photos...</p>}
+      {loadError && <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{loadError}</p>}
+      {!loading && !loadError && photos.length === 0 && <p className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-500">Aucune image compatible attachée à cette entrée.</p>}
+      {selectedPhoto && <>
+        <div className="overflow-hidden rounded-[22px] border border-[#d8e7f8] bg-[#f8fbff]">
+          <div className="flex h-56 items-center justify-center bg-[#edf5ff] sm:h-64">
+            <img src={selectedPhoto.file_url || selectedPhoto.url || selectedPhoto.file} alt={selectedPhoto.title || 'Photo sélectionnée'} className="h-full w-full object-contain"/>
           </div>
-        ))}
-      </div>
-      {busyId && <p role="status" className="mt-3 text-sm text-violet-700">Llama 3.2 Vision analyse votre photo. Cela peut prendre un moment...</p>}
-      {error && <p role="alert" className="mt-3 text-sm text-red-600">{error}</p>}
-      {result && !busyId && (
-        <div className="mt-4 space-y-3 rounded-xl border border-violet-100 bg-white p-4 text-sm">
-          <p><strong>Description :</strong> {result.description}</p>
-          <div>
-            <strong>Suggestion pour votre journal :</strong>
-            <p className="mt-2 whitespace-pre-wrap rounded-lg bg-slate-50 p-3">{result.journal_suggestion}</p>
-          </div>
-          <p className="text-xs text-slate-500">Texte proposé par l'IA : vérifiez-le avant de l'utiliser. Aucune modification automatique.</p>
+          <div className="flex items-center justify-between gap-3 px-4 py-3"><p className="min-w-0 truncate text-sm font-semibold text-slate-800">{selectedPhoto.title || 'Mon souvenir'}</p><span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[11px] text-slate-500">{photos.length} photo{photos.length > 1 ? 's' : ''}</span></div>
         </div>
-      )}
-    </div>
+        {photos.length > 1 && <div className="flex gap-2 overflow-x-auto pb-1" aria-label="Sélectionner une photo">
+          {photos.map((photo) => <button key={photo.id} type="button" onClick={() => setSelectedPhotoId(photo.id)} aria-label={`Choisir ${photo.title || 'cette photo'}`} aria-pressed={String(activePhotoId) === String(photo.id)} className={`relative size-16 shrink-0 overflow-hidden rounded-xl border-2 transition hover:scale-[1.04] ${String(activePhotoId) === String(photo.id) ? 'border-blue-600 ring-2 ring-blue-100' : 'border-transparent hover:border-slate-300'}`}><img src={photo.file_url || photo.url || photo.file} alt="" className="size-full object-cover"/></button>)}
+        </div>}
+        <button type="button" disabled={Boolean(busyId)} onClick={() => onAnalyze(activePhotoId)} className="group flex min-h-12 w-full items-center justify-center gap-2.5 rounded-2xl bg-[#173c70] px-4 py-3 text-sm font-semibold text-white shadow-[0_10px_25px_-14px_rgba(20,25,40,.7)] transition hover:-translate-y-0.5 hover:bg-[#23569a] disabled:cursor-wait disabled:opacity-60"><Sparkles size={17}/>{busyId ? 'Analyse en cours...' : 'Analyser cette photo'}{!busyId && <ArrowUpRight size={16} className="transition group-hover:translate-x-0.5 group-hover:-translate-y-0.5"/>}</button>
+      </>}
+      {busyId && <div role="status" className="flex items-center gap-3 rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-800"><span className="size-4 shrink-0 animate-spin rounded-full border-2 border-blue-200 border-t-blue-700"/>Llama 3.2 Vision examine votre photo. Cela peut prendre un moment...</div>}
+      {error && <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
+      {result && !busyId && <div className="space-y-4 rounded-[22px] border border-[#d8e8fc] bg-[#f6faff] p-5" aria-live="polite">
+        <div className="flex items-center gap-2 text-sm font-semibold text-blue-800"><Sparkles size={16}/> Résultat de l'analyse</div>
+        <div><p className="text-xs font-bold uppercase tracking-[.12em] text-slate-500">Description</p><p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-700">{result.description}</p></div>
+        <div className="rounded-2xl bg-white p-4"><p className="text-xs font-bold uppercase tracking-[.12em] text-blue-700">Suggestion d'écriture</p><p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-700">{result.journal_suggestion}</p></div>
+        <p className="text-xs leading-5 text-slate-500">Suggestion générée par IA, à vérifier. Aucun changement automatique.</p>
+      </div>}
+    </section>
   )
 }
+
+function JournalDictation({ onTranscript, disabled = false }) {
+  const recorderRef = useRef(null)
+  const streamRef = useRef(null)
+  const chunksRef = useRef([])
+  const [recording, setRecording] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+
+  useEffect(() => () => {
+    if (recorderRef.current?.state === "recording") recorderRef.current.stop()
+    streamRef.current?.getTracks().forEach((track) => track.stop())
+  }, [])
+
+  const stop = () => {
+    if (recorderRef.current?.state === "recording") recorderRef.current.stop()
+  }
+
+  const start = async () => {
+    setError("")
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setError("Enregistrement non disponible. Utilisez localhost ou HTTPS et un navigateur compatible.")
+      return
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      streamRef.current = stream
+      const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"]
+        .find((type) => MediaRecorder.isTypeSupported(type))
+      const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream)
+      recorderRef.current = recorder
+      chunksRef.current = []
+      recorder.ondataavailable = (event) => { if (event.data.size) chunksRef.current.push(event.data) }
+      recorder.onerror = () => { setError("Erreur pendant l'enregistrement."); setRecording(false) }
+      recorder.onstop = async () => {
+        setRecording(false)
+        stream.getTracks().forEach((track) => track.stop())
+        streamRef.current = null
+        const type = recorder.mimeType || "audio/webm"
+        const extension = type.includes("mp4") ? "mp4" : type.includes("ogg") ? "ogg" : "webm"
+        const blob = new Blob(chunksRef.current, { type })
+        if (!blob.size) { setError("Enregistrement vide."); return }
+        setBusy(true)
+        try {
+          const result = await journalWhisperService.transcribe(new File([blob], `recording.${extension}`, { type }))
+          if (!result?.text) throw new Error("Aucun texte transcrit.")
+          onTranscript(result.text)
+        } catch (err) { setError(err.message || "Transcription impossible.") }
+        finally { setBusy(false) }
+      }
+      recorder.start()
+      setRecording(true)
+    } catch (err) { setError(err.message || "Accès au microphone refusé.") }
+  }
+
+  return <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div><p className="text-sm font-bold text-slate-900">Dictée vocale</p>
+        <p className="text-xs text-slate-500">Parlez librement, puis vérifiez la transcription avant d'enregistrer.</p></div>
+      <button type="button" disabled={disabled || busy} onClick={recording ? stop : start}
+        className={`${actionPrimary} ${recording ? "!bg-rose-600 hover:!bg-rose-700" : ""}`}>
+        <Mic size={16}/>{recording ? "Arrêter" : busy ? "Transcription..." : "Dicter mon texte"}
+      </button>
+    </div>
+    {recording && <p role="status" className="mt-2 text-xs font-medium text-rose-700">● Enregistrement en cours…</p>}
+    {busy && <p role="status" className="mt-2 text-xs text-violet-700">Transcription de votre audio en cours…</p>}
+    {error && <p role="alert" className="mt-2 text-xs text-red-600">{error}</p>}
+  </div>
+}
+
+const countJournalWords = (text) => (text.trim().match(/\S+/g) || []).length
 
 function EntryForm({ item }) {
   const { createJournal, updateJournal, notify } = useStore()
@@ -156,7 +246,10 @@ function EntryForm({ item }) {
   const [tagText, setTagText] = useState(() => (item?.tags || []).join(", "))
   const [selectedIds, setSelectedIds] = useState(() => item?.images || [])
   const [availablePhotos, setAvailablePhotos] = useState([])
-  const [mediaLoading, setMediaLoading] = useState(true)
+  const [mediaLoading, setMediaLoading] = useState(false)
+  const [showLibrary, setShowLibrary] = useState(false)
+  const [fieldErrors, setFieldErrors] = useState({})
+  const [filePreviews, setFilePreviews] = useState([])
   const [newFiles, setNewFiles] = useState([])
   const [ai, setAi] = useState(null)
   const [aiBusy, setAiBusy] = useState(false)
@@ -165,28 +258,53 @@ function EntryForm({ item }) {
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
+    if (!showLibrary) return
     let active = true
+    setMediaLoading(true)
     mediaPhotoService.getAttachments().then((photos) => {
-      if (active) setAvailablePhotos(photos)
+      if (active) setAvailablePhotos(Array.isArray(photos) ? photos : photos.results || [])
     }).catch((err) => {
-      if (active) setError(err.message || "Impossible de charger les médias.")
-    }).finally(() => {
-      if (active) setMediaLoading(false)
-    })
+      if (active) setError(err.message || "Impossible de charger la bibliothèque.")
+    }).finally(() => { if (active) setMediaLoading(false) })
     return () => { active = false }
-  }, [])
+  }, [showLibrary])
+
+  useEffect(() => {
+    const previews = newFiles.map((file) => ({ file, url: URL.createObjectURL(file) }))
+    setFilePreviews(previews)
+    return () => previews.forEach(({ url }) => URL.revokeObjectURL(url))
+  }, [newFiles])
+
+  const validate = (draft) => {
+    const errors = {}
+    const title = form.title.trim()
+    const tags = tagText.split(",").map((x) => x.trim()).filter(Boolean)
+    if (title.length < 3 || title.length > 255) errors.title = "Le titre doit contenir entre 3 et 255 caractères."
+    if (!draft && countJournalWords(form.content) < 5) errors.content = "Votre histoire doit contenir au moins 5 mots pour être publiée (brouillon autorisé)."
+    if (!form.date || !/^\d{4}-\d{2}-\d{2}$/.test(form.date) || Number.isNaN(Date.parse(form.date))) errors.date = "Choisissez une date valide."
+    else if (form.date > new Date().toLocaleDateString("en-CA")) errors.date = "La date ne peut pas être dans le futur."
+    if (!form.mood || form.mood.length > 50) errors.mood = "Choisissez une humeur valide."
+    if (tags.length > 10) errors.tags = "Maximum 10 tags."
+    else if (tags.some((tag) => tag.length > 30)) errors.tags = "Chaque tag doit contenir au maximum 30 caractères."
+    else if (new Set(tags.map((tag) => tag.toLowerCase())).size !== tags.length) errors.tags = "Évitez les tags en double."
+    setFieldErrors(errors)
+    return Object.keys(errors).length === 0
+  }
+
+  const clearFieldError = (name) => setFieldErrors((prev) => ({ ...prev, [name]: undefined }))
+  const FieldError = ({ name }) => fieldErrors[name] ? <p role="alert" className="mt-1.5 flex items-center gap-1.5 text-xs font-medium text-rose-600"><AlertCircle size={13}/>{fieldErrors[name]}</p> : null
 
   const save = async (draft = false) => {
-    if (form.title.trim().length < 3 || (!draft && !form.content.trim())) {
-      setError("Titre : minimum 3 caractères. Contenu requis sauf pour un brouillon.")
+    if (!validate(draft)) {
+      setError("Corrigez les champs indiqués avant d’enregistrer.")
       return
     }
     setSaving(true)
     setError("")
     try {
       // Ensure every selected attachment is still available to this account.
-      const beforeUpload = await mediaPhotoService.getAttachments()
-      const permittedIds = new Set(beforeUpload.map((m) => String(m.id)))
+      const beforeUpload = selectedIds.length ? await mediaPhotoService.getAttachments() : []
+      const permittedIds = new Set((Array.isArray(beforeUpload) ? beforeUpload : beforeUpload.results || []).map((m) => String(m.id)))
       const missing = selectedIds.filter((id) => !permittedIds.has(String(id)))
       if (missing.length) {
         throw new Error("Certains médias sélectionnés ne sont plus accessibles. Retirez-les puis réessayez : " + missing.join(", "))
@@ -199,8 +317,8 @@ function EntryForm({ item }) {
       // Confirm each uploaded UUID is visible through the authenticated media API.
       if (uploaded.length) {
         const visible = await mediaPhotoService.getAttachments()
-        const visibleIds = new Set(visible.map((m) => m.id))
-        if (uploaded.some((id) => !visibleIds.has(id))) {
+        const visibleIds = new Set((Array.isArray(visible) ? visible : visible.results || []).map((m) => String(m.id)))
+        if (uploaded.some((id) => !visibleIds.has(String(id)))) {
           throw new Error("Média envoyé mais introuvable dans votre bibliothèque. Vérifiez que les deux API utilisent la même base et le même utilisateur.")
         }
       }
@@ -222,80 +340,103 @@ function EntryForm({ item }) {
   }
 
   return <>
-    <PageHeader title={item ? "Modifier l’entrée" : "Nouvelle entrée"}
-      subtitle="Écrivez librement. Vos entrées sont enregistrées dans votre journal personnel." />
-    <div className="grid gap-6 xl:grid-cols-[1fr_340px]">
-      <Card className="space-y-5 p-6">
-        <Input label="Titre" placeholder="Donnez un titre à cette journée" value={form.title}
-          onChange={(e) => setForm({ ...form, title: e.target.value })} />
-        <Textarea label="Votre histoire" rows={12} placeholder="Qu’avez-vous envie de retenir ?"
-          value={form.content} onChange={(e) => setForm({ ...form, content: e.target.value })} />
+    <div className="mb-7 rounded-3xl border border-slate-200 bg-gradient-to-r from-white via-violet-50/60 to-indigo-50/60 p-7 shadow-sm">
+      <Link to="/journal" className="mb-5 inline-flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-violet-700"><ArrowLeft size={16} /> Mon journal</Link>
+      <div className="flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-2xl bg-violet-600 text-white shadow-sm"><Edit3 size={20} /></span><div><p className="text-xs font-bold uppercase tracking-[0.2em] text-violet-600">Espace d’écriture</p><h1 className="text-2xl font-bold tracking-tight text-slate-900">{item ? "Modifier mon entrée" : "Écrire une nouvelle entrée"}</h1></div></div>
+      <p className="mt-3 text-sm text-slate-500">Un moment pour vous. Écrivez librement, à votre rythme.</p>
+    </div>
+    <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_350px]">
+      <Card className="space-y-6 rounded-3xl border border-slate-200 bg-white p-7 shadow-sm">
+        <div className="space-y-2">
+          <div className="flex items-center justify-between"><label className="text-sm font-semibold text-slate-800">Titre <span className="text-rose-500">*</span></label><span className="text-xs text-slate-400">{form.title.length}/255</span></div>
+          <input type="text" maxLength={255} placeholder="Donnez un titre à cette journée" value={form.title}
+            aria-invalid={Boolean(fieldErrors.title)} onChange={(e) => { setForm({ ...form, title: e.target.value }); clearFieldError("title") }}
+            className={`w-full rounded-2xl border bg-white px-4 py-3 text-sm outline-none transition focus:ring-4 focus:ring-violet-100 ${fieldErrors.title ? "border-rose-400" : "border-slate-200 focus:border-violet-400"}`} />
+          <FieldError name="title" />
+        </div>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between"><label className="text-sm font-semibold text-slate-800">Votre histoire <span className="text-rose-500">*</span></label><span className="text-xs text-slate-400">{countJournalWords(form.content)} / 5 mots minimum</span></div>
+          <textarea rows={11} placeholder="Qu’avez-vous envie de retenir ?" value={form.content}
+            aria-invalid={Boolean(fieldErrors.content)} onChange={(e) => { setForm({ ...form, content: e.target.value }); clearFieldError("content") }}
+            className={`w-full resize-y rounded-2xl border bg-white px-4 py-4 text-sm leading-7 outline-none transition focus:ring-4 focus:ring-violet-100 ${fieldErrors.content ? "border-rose-400" : "border-slate-200 focus:border-violet-400"}`} />
+          <FieldError name="content" />
+          <p className="text-xs text-slate-400">Minimum 5 mots pour publier. Vous pouvez enregistrer un brouillon à tout moment.</p>
+        </div>
+        <JournalDictation disabled={saving} onTranscript={(text) => setForm((prev) => ({ ...prev, content: [prev.content.trim(), text.trim()].filter(Boolean).join("\n\n") }))} />
         <div className="grid gap-4 sm:grid-cols-3">
-          <Input label="Date" type="date" value={form.date}
-            onChange={(e) => setForm({ ...form, date: e.target.value })} />
-          <Select label="Humeur" value={form.mood}
-            onChange={(e) => setForm({ ...form, mood: e.target.value })}>
+          <div><Input label="Date" type="date" max={new Date().toLocaleDateString("en-CA")} value={form.date}
+            onChange={(e) => { setForm({ ...form, date: e.target.value }); clearFieldError("date") }} /><FieldError name="date" /></div>
+          <div><Select label="Humeur" value={form.mood}
+            onChange={(e) => { setForm({ ...form, mood: e.target.value }); clearFieldError("mood") }}>
             {Object.keys(moodColors).map((x) => <option key={x}>{x}</option>)}
-          </Select>
-          <Input label="Tags (séparés par des virgules)" value={tagText}
-            onChange={(e) => setTagText(e.target.value)} />
+          </Select><FieldError name="mood" /></div>
+          <div><Input label="Tags (séparés par des virgules)" value={tagText}
+            onChange={(e) => { setTagText(e.target.value); clearFieldError("tags") }} /><FieldError name="tags" /></div>
         </div>
-        <div className="rounded-xl border border-slate-200 p-4">
-          <label className="mb-3 block text-sm font-bold">Photos et vidéos de cette entrée</label>
-          <input type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm"
-            multiple disabled={saving} className="block w-full text-sm"
-            onChange={(e) => {
-              const files = Array.from(e.target.files || [])
-              const validTypes = ["image/jpeg", "image/png", "image/webp", "image/gif", "video/mp4", "video/webm"]
-              if (files.some((f) => !validTypes.includes(f.type) || f.size > (f.type.startsWith("video/") ? 100 : 10) * 1024 * 1024)) {
-                setError("Formats : JPG, PNG, WEBP, GIF, MP4, WEBM. Maximum 10 Mo/image ou 100 Mo/vidéo.")
-                e.target.value = ""
-                return
-              }
-              setError("")
-              setNewFiles((prev) => [...prev, ...files]); e.target.value = ""
-            }} />
-          {newFiles.length > 0 && <div className="mt-3 space-y-2">
-            {newFiles.map((file, index) => <div key={`${file.name}-${index}`}
-              className="flex items-center justify-between gap-2 text-sm">
-              <span className="truncate">{file.name} {file.type.startsWith("video/") ? "🎬" : "📷"}</span>
-              <button type="button" className="text-red-600" disabled={saving}
-                onClick={() => setNewFiles((prev) => prev.filter((_, i) => i !== index))}>Retirer</button>
-            </div>)}
-          </div>}
-          {mediaLoading && <p className="mt-3 text-xs text-slate-500">Chargement des médias...</p>}
-          {selectedIds.length > 0 && <div className="mt-3 flex items-center justify-between rounded-lg bg-violet-50 p-2 text-sm">
-            <span>{selectedIds.length} média(s) sélectionné(s)</span>
-            <button type="button" disabled={saving} className="font-semibold text-red-600" onClick={() => setSelectedIds([])}>Tout retirer</button>
-          </div>}
-          {availablePhotos.length > 0 && <>
-            <p className="mt-4 mb-2 text-sm font-semibold">Choisir aussi dans ma bibliothèque (cliquer pour ajouter ou retirer)</p>
-            <div className="grid grid-cols-3 gap-2">
-              {availablePhotos.map((photo) => {
-                const selected = selectedIds.includes(photo.id)
-                return <div key={photo.id} className={`relative overflow-hidden rounded-lg border-2 ${selected ? "border-violet-600" : "border-slate-200"}`}>
-                  <button type="button" disabled={saving} aria-label={selected ? `Retirer ${photo.title}` : `Sélectionner ${photo.title}`}
-                    onClick={() => setSelectedIds((prev) => selected ? prev.filter((id) => id !== photo.id) : [...prev, photo.id])}
-                    className="block w-full text-left">
-                    {photo.media_type === "video"
-                      ? <video src={photo.url || photo.file} muted preload="metadata" className="aspect-square w-full bg-black object-cover pointer-events-none" />
-                      : <img src={photo.url || photo.file} alt={photo.title} className="aspect-square w-full object-cover" />}
-                    <span className={`block p-2 text-center text-xs font-bold ${selected ? "text-red-600" : "text-violet-600"}`}>{selected ? "Retirer" : "Ajouter"}</span>
-                  </button>
-                </div>
-              })}
+        <section className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5 sm:p-6">
+          <div className="mb-4 flex items-start gap-3">
+            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white text-slate-700 shadow-sm ring-1 ring-slate-200"><Images size={21}/></span>
+            <div><h3 className="font-bold text-slate-900">Souvenirs de cette entrée</h3><p className="mt-1 text-xs leading-5 text-slate-500">Ajoutez des photos ou vidéos uniquement à cette entrée. Votre bibliothèque n’apparaît plus automatiquement.</p></div>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <label className={`${actionPrimary} cursor-pointer`}>
+              <Camera size={18}/> Importer des photos <ArrowUpRight size={15} className="opacity-60"/>
+              <input type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm" multiple disabled={saving} className="sr-only"
+                onChange={(e) => {
+                  const files = Array.from(e.target.files || [])
+                  const validTypes = ["image/jpeg", "image/png", "image/webp", "image/gif", "video/mp4", "video/webm"]
+                  if (files.some((f) => !validTypes.includes(f.type) || f.size > (f.type.startsWith("video/") ? 100 : 10) * 1024 * 1024)) {
+                    setError("Formats : JPG, PNG, WEBP, GIF, MP4, WEBM. Maximum 10 Mo/image ou 100 Mo/vidéo.")
+                    e.target.value = ""; return
+                  }
+                  setError(""); setNewFiles((prev) => [...prev, ...files]); e.target.value = ""
+                }} />
+            </label>
+            <button type="button" disabled={saving} onClick={() => setShowLibrary(true)}
+              className={actionSecondary}>
+              <FolderOpen size={18}/> Choisir dans la bibliothèque
+            </button>
+          </div>
+          {(filePreviews.length > 0 || selectedIds.length > 0) && <div className="mt-5">
+            <div className="mb-3 flex items-center justify-between"><p className="text-sm font-semibold text-slate-800">Fichiers attachés ({filePreviews.length + selectedIds.length})</p>
+              <button type="button" disabled={saving} className="rounded-lg px-3 py-2 text-xs font-semibold text-rose-600 transition hover:bg-rose-50" onClick={() => { setNewFiles([]); setSelectedIds([]) }}>Tout retirer</button></div>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+              {filePreviews.map(({ file, url }, index) => <div key={`${file.name}-${index}`} className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                {file.type.startsWith("video/") ? <video src={url} className="aspect-square w-full bg-slate-900 object-cover" muted /> : <img src={url} alt={file.name} className="aspect-square w-full object-cover" />}
+                <button type="button" aria-label={`Retirer ${file.name}`} disabled={saving} onClick={() => setNewFiles((prev) => prev.filter((_, i) => i !== index))} className={`absolute right-2 top-2 ${actionDanger}`}><X size={15}/></button>
+                <p className="truncate px-2 py-2 text-xs text-slate-600" title={file.name}>{file.name}</p>
+              </div>)}
+              {selectedIds.map((id) => { const photo = availablePhotos.find((p) => String(p.id) === String(id)); return <div key={id} className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                {photo ? (photo.media_type === "video" ? <video src={photo.file_url || photo.url || photo.file} muted className="aspect-square w-full bg-slate-900 object-cover" /> : <img src={photo.file_url || photo.url || photo.file} alt={photo.title || "Souvenir"} className="aspect-square w-full object-cover" />) : <div className="grid aspect-square place-items-center bg-violet-50 text-violet-400"><ImageIcon size={28}/></div>}
+                <button type="button" aria-label="Retirer le média" disabled={saving} onClick={() => setSelectedIds((prev) => prev.filter((x) => String(x) !== String(id)))} className={`absolute right-2 top-2 ${actionDanger}`}><X size={15}/></button>
+                <p className="truncate px-2 py-2 text-xs text-slate-600">{photo?.title || "Photo existante"}</p>
+              </div> })}
             </div>
-          </>}
-        </div>
+          </div>}
+          {showLibrary && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-label="Bibliothèque de médias">
+            <div className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+              <div className="flex items-center justify-between border-b border-slate-100 p-5"><div><h3 className="text-lg font-bold text-slate-900">Ma bibliothèque</h3><p className="text-xs text-slate-500">Choisissez uniquement les souvenirs à associer à cette entrée.</p></div>
+                <button type="button" aria-label="Fermer" onClick={() => setShowLibrary(false)} className="rounded-lg border border-slate-200 p-2 text-slate-500 transition hover:bg-slate-50"><X size={21}/></button></div>
+              <div className="overflow-y-auto p-5">{mediaLoading ? <p className="py-12 text-center text-slate-500">Chargement de votre bibliothèque…</p> : availablePhotos.length === 0 ? <p className="py-12 text-center text-slate-500">Aucun média dans votre bibliothèque.</p> :
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">{availablePhotos.map((photo) => { const selected = selectedIds.some((id) => String(id) === String(photo.id)); return <button key={photo.id} type="button" onClick={() => setSelectedIds((prev) => selected ? prev.filter((id) => String(id) !== String(photo.id)) : [...prev, photo.id])}
+                  className={`group relative overflow-hidden rounded-xl border-2 bg-white text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${selected ? "border-slate-900 ring-2 ring-slate-200" : "border-slate-200 hover:border-slate-400"}`}>
+                  {photo.media_type === "video" ? <video src={photo.file_url || photo.url || photo.file} muted className="aspect-square w-full bg-slate-900 object-cover" /> : <img src={photo.file_url || photo.url || photo.file} alt={photo.title || "Photo"} className="aspect-square w-full object-cover" />}
+                  {selected && <span className="absolute right-2 top-2 rounded-lg bg-slate-900 p-1.5 text-white shadow"><CheckCircle2 size={17}/></span>}
+                  <p className="truncate p-2 text-xs font-medium text-slate-700">{photo.title || "Souvenir"}</p>
+                </button> })}</div>}</div>
+              <div className="flex items-center justify-between border-t border-slate-100 p-4"><p className="text-xs text-slate-500">{selectedIds.length} sélectionné(s)</p><button type="button" onClick={() => setShowLibrary(false)} className={actionPrimary}>Terminer</button></div>
+            </div>
+          </div>}
+        </section>
         {error && <p className="text-sm text-red-600" role="alert">{error}</p>}
-        <div className="flex flex-wrap gap-2">
-          <Button disabled={saving} onClick={() => save(false)}>{saving ? "Enregistrement..." : "Enregistrer l’entrée"}</Button>
-          <Button disabled={saving} variant="secondary" onClick={() => save(true)}>Enregistrer le brouillon</Button>
-          <Button disabled={saving} variant="ghost" onClick={() => nav("/journal")}>Annuler</Button>
+        <div className="flex flex-wrap items-center gap-3 border-t border-slate-200 pt-6">
+          <button type="button" disabled={saving} onClick={() => save(false)} className={actionPrimary}><CheckCircle2 size={17}/>{saving ? "Enregistrement..." : "Publier l’entrée"} <ArrowUpRight size={15} className="opacity-60"/></button>
+          <button type="button" disabled={saving} onClick={() => save(true)} className={actionSecondary}><Save size={17}/> Garder en brouillon</button>
+          <button type="button" disabled={saving} onClick={() => nav("/journal")} className={actionSubtle}>Annuler</button>
         </div>
       </Card>
       <div className="space-y-5">
-        <Card className="p-5">
+        <Card className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <SectionTitle title="Assistant d’écriture IA" subtitle="Améliorez votre texte sans modifier votre brouillon automatiquement." />
           <Button variant="ai" className="w-full" disabled={aiBusy || !form.content.trim()}
             onClick={async () => {
@@ -318,10 +459,7 @@ function EntryForm({ item }) {
             </div>
           </div>}
         </Card>
-        <Card className="p-5"><SectionTitle title="Photos et vidéos sélectionnées" />
-          <JournalPhotos ids={selectedIds} />
-          <p className="mt-2 text-xs text-slate-500">Les nouveaux fichiers seront envoyés lors de l’enregistrement.</p>
-        </Card>
+
       </div>
     </div>
   </>
@@ -362,6 +500,7 @@ export function JournalPage({ mode = "list" }) {
   const [photoAnalysis, setPhotoAnalysis] = useState(null)
   const [photoBusyId, setPhotoBusyId] = useState(null)
   const [photoError, setPhotoError] = useState("")
+  const [assistantTab, setAssistantTab] = useState("text")
 
   const analyzePhoto = async (mediaId) => {
     if (!id || photoBusyId) return
@@ -398,6 +537,7 @@ export function JournalPage({ mode = "list" }) {
   const [status, setStatus] = useState("all")
   const [dateFrom, setDateFrom] = useState("")
   const [dateTo, setDateTo] = useState("")
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false)
   const [page, setPage] = useState(1)
   const pageSize = 10
   const [results, setResults] = useState([])
@@ -405,6 +545,7 @@ export function JournalPage({ mode = "list" }) {
   const [listLoading, setListLoading] = useState(false)
   const [listError, setListError] = useState("")
   const [revision, setRevision] = useState(0)
+  const [exportBusy, setExportBusy] = useState(false)
   const [detail, setDetail] = useState(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [confirm, setConfirm] = useState(false)
@@ -424,6 +565,7 @@ export function JournalPage({ mode = "list" }) {
     const filters = { page, page_size: pageSize, search: debouncedQ, ordering: sort,
       mood, date_from: dateFrom, date_to: dateTo }
     if (status === "favorite") filters.favorite = true
+    if (status === "pinned") filters.pinned = true
     if (status === "draft") filters.draft = true
     if (status === "published") filters.draft = false
     journalService.getEntries(filters)
@@ -495,6 +637,32 @@ export function JournalPage({ mode = "list" }) {
     }
   }
 
+  const togglePinned = async (entry) => {
+    try {
+      const updated = await journalService.togglePin(entry.id)
+      const pinned = Boolean(updated.pinned)
+      setResults((prev) => prev.map((x) => String(x.id) === String(entry.id) ? { ...x, pinned } : x))
+      setDetail((prev) => prev && String(prev.id) === String(entry.id) ? { ...prev, pinned } : prev)
+      setRevision((n) => n + 1)
+      notify(pinned ? "Entrée épinglée" : "Entrée désépinglée")
+    } catch (err) {
+      notify(err.message || "Impossible de modifier l'épinglage", "error")
+    }
+  }
+
+  const exportJournalPdf = async (entry) => {
+    if (exportBusy) return
+    setExportBusy(true)
+    try {
+      await journalService.exportEntryPdf(entry.id)
+      notify("PDF téléchargé")
+    } catch (err) {
+      notify(err.message || "Export PDF impossible", "error")
+    } finally {
+      setExportBusy(false)
+    }
+  }
+
   const removeEntry = async () => {
     if (!item || busy) return
     setBusy(true)
@@ -523,65 +691,86 @@ export function JournalPage({ mode = "list" }) {
     if (!item) return <Empty title="Entrée introuvable" />
     return (
       <>
-        <Link to="/journal" className="mb-5 inline-flex items-center gap-2 text-sm font-bold text-slate-500">
-          <ArrowLeft size={16} /> Retour au journal
-        </Link>
-        <Card className="mx-auto max-w-4xl overflow-hidden">
-          <div className="border-b border-slate-100 p-7">
-            <div className="flex flex-wrap gap-2">
-              <Badge className="bg-violet-50 text-violet-700">{item.mood}</Badge>
-              {item.draft && <Badge>Brouillon</Badge>}
-              {(item.tags || []).map((x) => <Badge key={x}>#{x}</Badge>)}
-            </div>
-            <h1 className="mt-5 text-3xl font-extrabold">{item.title}</h1>
-            <p className="mt-2 text-sm text-slate-500">{item.date}</p>
-          </div>
-          <div className="p-7">
-            <p className="whitespace-pre-line leading-8 text-slate-700">{item.content}</p>
-            <JournalPhotos ids={item.images || []} />
-            <JournalVisionPanel
-              images={item.images || []}
-              busyId={photoBusyId}
-              error={photoError}
-              result={photoAnalysis}
-              onAnalyze={analyzePhoto}
-            />
-            <div className="mt-8 rounded-2xl border border-cyan-100 bg-cyan-50 p-5">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h2 className="font-extrabold text-cyan-900">Analyse IA de votre journal</h2>
-                  <p className="mt-1 text-xs text-cyan-700">Analyse locale avec Llama 3.2 · Les émotions détectées sont des suggestions, pas un diagnostic.</p>
+        <div className="w-full">
+          <nav className="mb-7 flex flex-wrap items-center justify-between gap-4" aria-label="Navigation du journal">
+            <Link to="/journal" className="group inline-flex items-center gap-2 text-sm font-semibold text-slate-600 transition hover:text-slate-950"><span className="grid size-9 place-items-center rounded-xl border border-slate-200 bg-white transition group-hover:-translate-x-1"><ArrowLeft size={16}/></span> Retour à ma bibliothèque</Link>
+            <span className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">MON JOURNAL <span className="mx-2 text-slate-300">/</span> LECTURE</span>
+          </nav>
+          <div className="grid items-start gap-5 2xl:gap-7 lg:grid-cols-[minmax(0,1fr)_minmax(360px,420px)] xl:grid-cols-[minmax(0,1fr)_minmax(390px,460px)]">
+            <article className="min-w-0 overflow-hidden rounded-[26px] border border-[#dce7f5] bg-[#ffffff] shadow-[0_16px_55px_-40px_rgba(35,33,25,.32)]">
+              <header className="relative overflow-hidden border-b border-[#e1ebf7] bg-[#edf5ff] px-6 pb-8 pt-8 md:px-9 md:pb-10 md:pt-10 xl:px-11">
+                <div className="absolute right-0 top-0 h-full w-2 bg-[#4b9ce5]" aria-hidden="true"/>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#4778ae]"><BookOpen size={15}/> Journal personnel</span>
+                  <span className="inline-flex items-center gap-2 text-sm text-slate-500"><CalendarDays size={15}/>{item.date}</span>
                 </div>
-                <Button variant="ai" disabled={aiLoading || !item.content?.trim()} onClick={analyzeJournal}>
-                  <Sparkles size={16} /> {aiLoading ? "Analyse en cours..." : aiAnalysis ? "Relancer l'analyse IA" : "Analyser avec l'IA"}
-                </Button>
-              </div>
-              {aiLoading && <p className="mt-4 text-sm text-cyan-800" role="status">Llama 3.2 analyse votre entrée. Cela peut prendre quelques secondes...</p>}
-              {aiError && <p className="mt-4 text-sm text-red-600" role="alert">{aiError}</p>}
-              {aiAnalysis && !aiLoading && (
-                <div className="mt-4 space-y-3 text-sm text-cyan-950">
-                  <p><strong>Émotion principale :</strong> {aiAnalysis.primary_emotion}</p>
-                  <div>
-                    <strong>Émotions secondaires :</strong>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {(aiAnalysis.secondary_emotions || []).length
-                        ? aiAnalysis.secondary_emotions.map((emotion, index) => <Badge key={`${emotion}-${index}`} className="bg-white text-cyan-800">{emotion}</Badge>)
-                        : <span className="ml-2">Aucune identifiée</span>}
+                <h1 className="mt-7 break-words font-serif text-[40px] font-medium leading-[1.12] tracking-[-0.045em] text-[#142b49] md:text-[54px] xl:text-[60px]">{item.title}</h1>
+                <div className="mt-7 flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center gap-2 rounded-full border border-[#d6e5f7] bg-white/80 px-3 py-1.5 text-xs font-semibold text-slate-700"><span className="size-2 rounded-full" style={{backgroundColor:moodColors[item.mood] || '#a78bfa'}}/>{item.mood || 'Sans humeur'}</span>
+                  {item.draft && <span className="rounded-full bg-blue-100 px-3 py-1.5 text-xs font-semibold text-blue-800">Brouillon</span>}
+                  {item.pinned && <span className="inline-flex items-center gap-1 rounded-full bg-[#e1efff] px-3 py-1.5 text-xs font-semibold text-[#315d8d]"><Pin size={12}/> Épinglée</span>}
+                  {(item.tags || []).map((tag) => <span key={tag} className="rounded-full border border-[#d6e5f7] px-3 py-1.5 text-xs text-slate-500">#{tag}</span>)}
+                </div>
+              </header>
+              <div className="px-6 py-8 md:px-9 md:py-10 xl:px-11">
+                <div className="mb-7 flex items-center gap-3"><span className="h-px w-10 bg-[#68a8ed]"/><span className="text-[11px] font-bold uppercase tracking-[0.24em] text-[#3674b5]">Le récit</span></div>
+                <div className="whitespace-pre-wrap break-words font-serif text-[18px] leading-[1.9] text-[#314765] md:text-[20px]">
+                  {item.content || <span className="italic text-slate-400">Cette entrée ne contient pas encore de texte.</span>}
+                </div>
+                {(item.images || []).length > 0 && <section className="mt-11 border-t border-[#e1ebf7] pt-9">
+                  <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-serif text-2xl font-medium text-[#152d4c]">Les images de ce jour</h2><p className="mt-1 text-xs text-slate-500">Les photos que vous avez choisies pour cette histoire</p></div><button type="button" onClick={() => setAssistantTab('photo')} title="Analyser les photos avec l’IA" aria-label="Analyser les photos avec l’IA" className="grid size-10 place-items-center rounded-xl border border-[#cfe1f7] bg-[#eef6ff] text-[#3575b9] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#dceeff]"><Sparkles size={18}/></button></div>
+                  <JournalPhotos ids={item.images || []} />
+                </section>}
+                <footer className="mt-12 border-t border-[#e1ebf7] pt-6">
+                  <div className="flex flex-wrap items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#648cb9]">Votre histoire, vos souvenirs</p>
+                      <p className="mt-1 text-sm text-slate-500">Gardez cette page, partagez-la ou retrouvez-la plus tard.</p>
+                    </div>
+                    <div className="flex items-center gap-2 rounded-2xl border border-[#dce7f5] bg-white/90 p-1.5 shadow-[0_6px_20px_-14px_rgba(35,33,25,.28)]" role="group" aria-label="Actions sur cette entrée">
+                      <button type="button" disabled={exportBusy} onClick={() => exportJournalPdf(item)} title="Télécharger le PDF" aria-label={exportBusy ? 'Export PDF en cours' : 'Télécharger le PDF'} className="group relative grid size-10 place-items-center rounded-xl bg-[#17477e] text-white transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#245e9d] hover:shadow-md disabled:cursor-wait disabled:opacity-50"><Download size={18} strokeWidth={1.9}/></button>
+                      <span className="mx-0.5 h-6 w-px bg-[#dce7f5]" aria-hidden="true"/>
+                      <Link to={`/journal/${item.id}/edit`} title="Modifier cette histoire" aria-label="Modifier cette histoire" className="grid size-10 place-items-center rounded-xl text-[#6b7280] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#eaf3ff] hover:text-[#3b4654]"><Edit3 size={18} strokeWidth={1.9}/></Link>
+                      <button type="button" onClick={() => togglePinned(item)} title={item.pinned ? 'Désépingler cette histoire' : 'Épingler cette histoire'} aria-label={item.pinned ? 'Désépingler cette histoire' : 'Épingler cette histoire'} aria-pressed={Boolean(item.pinned)} className={`grid size-10 place-items-center rounded-xl transition-all duration-200 hover:-translate-y-0.5 ${item.pinned ? 'bg-blue-50 text-blue-700 hover:bg-blue-100' : 'text-[#6b7280] hover:bg-[#eaf3ff] hover:text-[#3979b7]'}`}><Pin size={18} strokeWidth={1.9} className={item.pinned ? 'fill-blue-600/20' : ''}/></button>
+                      <span className="mx-0.5 h-6 w-px bg-[#dce7f5]" aria-hidden="true"/>
+                      <button type="button" onClick={() => setConfirm(true)} title="Supprimer cette histoire" aria-label="Supprimer cette histoire" className="grid size-10 place-items-center rounded-xl text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:bg-rose-50 hover:text-rose-600"><Trash2 size={18} strokeWidth={1.9}/></button>
                     </div>
                   </div>
-                  <p><strong>Résumé :</strong> {aiAnalysis.summary}</p>
-                  <p><strong>Observation :</strong> {aiAnalysis.insight}</p>
-                  <p><strong>Question de réflexion :</strong> {aiAnalysis.reflection_question}</p>
+                  {exportBusy && <p className="mt-3 text-right text-xs text-slate-500" role="status">Préparation de votre PDF…</p>}
+                </footer>
+                {error && <p className="mt-3 text-sm text-red-600" role="alert">{error}</p>}
+              </div>
+            </article>
+            <aside className="min-w-0 space-y-5 lg:sticky lg:top-6">
+              <section className="overflow-hidden rounded-[26px] border border-[#dce8f8] bg-white shadow-[0_16px_48px_-34px_rgba(54,45,84,.34)]">
+                <div className="border-b border-[#dfeaf9] bg-gradient-to-br from-[#f4f9ff] via-white to-[#e9f3ff] px-6 pb-6 pt-6">
+                  <div className="flex items-center gap-3"><span className="grid size-12 place-items-center rounded-xl bg-slate-900 text-white"><Sparkles size={22}/></span><div><p className="text-[10px] font-bold uppercase tracking-[0.18em] text-blue-600">Votre compagnon d'écriture</p><h2 className="mt-0.5 text-2xl font-extrabold tracking-tight text-slate-900">MindLog AI</h2></div></div>
+                  <p className="mt-4 text-base leading-7 text-slate-600">Explorez vos pensées et vos souvenirs grâce à une analyse intelligente, à votre rythme.</p>
                 </div>
-              )}
-            </div>
-            <div className="mt-6 flex gap-2">
-              <Link to={`/journal/${item.id}/edit`}><Button variant="secondary"><Edit3 size={16} /> Modifier</Button></Link>
-              <Button variant="danger" onClick={() => setConfirm(true)}><Trash2 size={16} /> Supprimer</Button>
-            </div>
-            {error && <p className="mt-3 text-sm text-red-600" role="alert">{error}</p>}
+                <div className="p-6">
+                  <div className="grid grid-cols-2 gap-2 rounded-2xl bg-slate-100 p-1.5" role="tablist" aria-label="Fonctions de l'assistant IA">
+                    <button type="button" role="tab" aria-selected={assistantTab === 'text'} onClick={() => setAssistantTab('text')} className={`flex items-center justify-center gap-1.5 rounded-xl px-3 py-3.5 text-sm font-bold transition ${assistantTab === 'text' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}><Edit3 size={14}/> Mon texte</button>
+                    <button type="button" role="tab" aria-selected={assistantTab === 'photo'} onClick={() => setAssistantTab('photo')} className={`flex items-center justify-center gap-1.5 rounded-xl px-3 py-3.5 text-sm font-bold transition ${assistantTab === 'photo' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}><ImageIcon size={14}/> Mes photos</button>
+                  </div>
+                  {assistantTab === 'text' ? <div className="mt-5 space-y-4" role="tabpanel">
+                    <div className="rounded-2xl border border-blue-100 bg-blue-50/60 p-4"><p className="text-lg font-bold text-slate-900">Comprendre mes émotions</p><p className="mt-2 text-base leading-7 text-slate-600">Découvrez les émotions, les thèmes et une question pour réfléchir à votre récit.</p></div>
+                    <button type="button" disabled={aiLoading || !item.content?.trim()} onClick={analyzeJournal} className="group flex w-full items-center justify-between gap-3 rounded-2xl bg-[#17477e] px-4 py-3.5 text-left text-sm font-semibold text-white shadow-[0_12px_24px_-18px_rgba(35,45,60,.75)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#2562a5] disabled:cursor-not-allowed disabled:opacity-50"><span className="flex items-center gap-2.5"><Sparkles size={17}/>{aiLoading ? 'Analyse en cours...' : aiAnalysis ? "Relancer l’analyse" : 'Analyser mon récit'}</span><ArrowUpRight size={17} className="transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5"/></button>
+                    {aiLoading && <p role="status" className="text-xs text-blue-700">Llama 3.2 analyse votre texte...</p>}
+                    {aiError && <p role="alert" className="text-sm text-red-600">{aiError}</p>}
+                    {aiAnalysis && !aiLoading && <div className="max-h-[620px] space-y-5 overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50/80 p-5 text-base leading-8">
+                      <div><p className="text-[10px] font-bold uppercase tracking-widest text-blue-600">Émotion dominante</p><p className="mt-1 text-xl font-extrabold text-slate-900">{aiAnalysis.primary_emotion}</p></div>
+                      <div><p className="text-xs font-bold text-slate-700">Émotions secondaires</p><div className="mt-2 flex flex-wrap gap-1">{(aiAnalysis.secondary_emotions || []).length ? aiAnalysis.secondary_emotions.map((emotion,index)=><Badge key={`${emotion}-${index}`} className="bg-white text-blue-800">{emotion}</Badge>):<span className="text-slate-500">Aucune identifiée</span>}</div></div>
+                      <div><p className="text-xs font-bold text-slate-700">Résumé</p><p className="mt-1 text-slate-600">{aiAnalysis.summary}</p></div>
+                      <div><p className="text-xs font-bold text-slate-700">Observation</p><p className="mt-1 text-slate-600">{aiAnalysis.insight}</p></div>
+                      <div className="rounded-xl bg-white p-3"><p className="text-xs font-bold text-blue-700">Pour aller plus loin</p><p className="mt-1 text-slate-700">{aiAnalysis.reflection_question}</p></div>
+                    </div>}
+                  </div> : <div className="mt-3" role="tabpanel"><JournalVisionPanel images={item.images || []} busyId={photoBusyId} error={photoError} result={photoAnalysis} onAnalyze={analyzePhoto}/></div>}
+                  <p className="mt-5 border-t border-slate-100 pt-4 text-sm leading-6 text-slate-500">Analyse locale avec Llama 3.2. Les résultats sont des suggestions, pas un diagnostic.</p>
+                </div>
+              </section>
+            </aside>
           </div>
-        </Card>
+        </div>
         <Modal open={confirm} onClose={() => !busy && setConfirm(false)} title="Supprimer cette entrée?" actions={<>
           <Button variant="secondary" disabled={busy} onClick={() => setConfirm(false)}>Annuler</Button>
           <Button variant="danger" disabled={busy} onClick={removeEntry}>{busy ? "Suppression..." : "Confirmer"}</Button>
@@ -594,20 +783,24 @@ export function JournalPage({ mode = "list" }) {
 
   return (
     <>
-      <PageHeader title="Mon journal" subtitle="Un espace pour écrire, comprendre et revisiter vos journées."
-        actions={<Link to="/journal/new"><Button><Plus size={17} /> Nouvelle entrée</Button></Link>} />
-      <div className="mb-5 flex flex-wrap gap-2">
-        <Button variant="ai" onClick={() => setShowChat((v) => !v)}>
-          <MessageCircle size={16} /> {showChat ? "Fermer le chat IA" : "Discuter avec mon journal"}
-        </Button>
-        <Button variant="secondary" onClick={() => setShowAnalytics((value) => !value)}>
-          {showAnalytics ? "Masquer les statistiques" : "Voir les statistiques du journal"}
-        </Button>
-        {showAnalytics && <Button variant="secondary" onClick={() => setAnalyticsRevision((n) => n + 1)}>
-          Actualiser les statistiques
-        </Button>}
-      </div>
-      {showChat && <Card className="mb-6 space-y-4 p-5">
+      <section className="relative mb-8 overflow-hidden rounded-[28px] border border-[#d8e7f8] bg-[#edf5ff]">
+        <div aria-hidden="true" className="pointer-events-none absolute -right-20 -top-32 size-96 rounded-full border-[55px] border-[#dcecff]/60"/>
+        <div className="relative grid gap-7 px-7 pb-9 pt-10 md:grid-cols-[minmax(0,1fr)_auto] md:items-end md:px-11 md:pb-11 md:pt-12">
+          <div>
+            <p className="mb-5 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.24em] text-[#4b82ba]"><BookOpen size={15}/> MON CARNET PERSONNEL</p>
+            <h1 className="font-serif text-[46px] font-medium leading-none tracking-[-0.055em] text-[#152d4c] md:text-[70px]">Mes histoires<span className="text-[#3d89d8]">.</span></h1>
+            <p className="mt-5 max-w-xl text-[15px] leading-7 text-[#5a7495]">Un endroit pour déposer vos pensées, retrouver vos souvenirs et mesurer le chemin parcouru.</p>
+            <div className="mt-7 flex flex-wrap items-center gap-3 text-sm text-[#5b7b9e]"><span className="inline-flex items-center gap-2 rounded-full border border-[#cfe0f5] bg-white/80 px-4 py-2"><BookOpen size={15}/><strong className="text-slate-800">{count}</strong> {count > 1 ? 'histoires' : 'histoire'} conservée{count > 1 ? 's' : ''}</span><span className="hidden h-1 w-1 rounded-full bg-[#8cb7e3] sm:block"/><span>Chaque page compte.</span></div>
+          </div>
+          <Link to="/journal/new" className="inline-flex min-h-12 w-fit items-center justify-center gap-3 rounded-xl bg-[#173c70] px-6 py-3.5 text-sm font-semibold text-white shadow-lg shadow-slate-900/10 transition hover:-translate-y-0.5 hover:bg-[#39475c]"><Plus size={18}/> Nouvelle histoire <ArrowUpRight size={16}/></Link>
+        </div>
+        <div className="relative flex flex-wrap gap-2 border-t border-[#d8e7f8] bg-white/55 px-7 py-4 md:px-11">
+          <button type="button" className="inline-flex items-center gap-2 rounded-xl border border-[#d5e5f8] bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-[#e7f2ff]" aria-expanded={showChat} onClick={() => setShowChat((v) => !v)}><MessageCircle size={16}/>{showChat ? 'Fermer la discussion' : 'Discuter avec mon journal'}</button>
+          <button type="button" className="inline-flex items-center gap-2 rounded-xl border border-[#d5e5f8] bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-[#e7f2ff]" aria-expanded={showAnalytics} onClick={() => setShowAnalytics((v) => !v)}><BarChart size={16}/>{showAnalytics ? 'Masquer les statistiques' : 'Voir mes statistiques'}</button>
+          {showAnalytics && <button type="button" className={actionSubtle} onClick={() => setAnalyticsRevision((n) => n + 1)}><RotateCcw size={15}/> Actualiser</button>}
+        </div>
+      </section>
+      {showChat && <Card className="mb-6 space-y-4 rounded-3xl border border-blue-100 bg-white p-6 shadow-sm">
         <SectionTitle title="Ask My Journal — Chat IA" subtitle="Posez des questions sur vos entrées enregistrées." />
         <div className="max-h-96 space-y-4 overflow-y-auto" aria-live="polite">
           {chatMessages.length === 0 && <p className="text-sm text-slate-500">Exemple : Qu’est-ce qui m’a rendu heureux récemment ?</p>}
@@ -616,7 +809,7 @@ export function JournalPage({ mode = "list" }) {
             <p className="whitespace-pre-wrap"><strong>Assistant :</strong> {msg.answer}</p>
             {msg.sources.length > 0 && <div className="flex flex-wrap gap-2">
               <span className="text-xs text-slate-500">Entrées consultées :</span>
-              {msg.sources.map((src) => <Link key={src.id} to={`/journal/${src.id}`} className="text-xs font-semibold text-violet-600 underline">{src.title} ({src.date})</Link>)}
+              {msg.sources.map((src) => <Link key={src.id} to={`/journal/${src.id}`} className="text-xs font-semibold text-blue-600 underline">{src.title} ({src.date})</Link>)}
             </div>}
           </div>)}
         </div>
@@ -694,65 +887,64 @@ export function JournalPage({ mode = "list" }) {
           )}
         </div>
       )}
-      <Card className="mb-5 space-y-3 p-4">
-        <div className="relative">
-          <Search className="absolute left-3 top-3 text-slate-400" size={18} />
-          <input value={q} onChange={(e) => { setQ(e.target.value); resetPage() }}
-            className="w-full rounded-xl border border-slate-200 py-2.5 pl-10 pr-3 outline-none focus:ring-4 focus:ring-violet-100"
-            placeholder="Recherche dynamique : titre, contenu, tags..." aria-label="Rechercher" />
+      <section className="mb-6 overflow-hidden rounded-[22px] border border-[#dbe7f5] bg-white shadow-[0_8px_30px_-24px_rgba(35,40,50,.25)]" aria-label="Recherche et filtres du journal">
+        <div className="flex flex-col gap-3 p-3 sm:p-4 lg:flex-row lg:items-center">
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[#8ca9ca]" size={18}/>
+            <input value={q} onChange={(e) => {setQ(e.target.value); resetPage()}} className="h-12 w-full rounded-xl border border-[#dce8f7] bg-[#f6faff] pl-11 pr-10 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-[#6fa7e5] focus:bg-white focus:ring-2 focus:ring-[#e3f0ff]" placeholder="Rechercher dans mes histoires..." aria-label="Rechercher dans mes entrées" />
+            {q && <button type="button" onClick={() => {setQ(''); setDebouncedQ(''); resetPage()}} className="absolute right-3 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-lg text-slate-400 hover:bg-slate-200 hover:text-slate-700" aria-label="Effacer la recherche"><X size={15}/></button>}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative min-w-[155px] flex-1 sm:flex-none">
+              <label htmlFor="journal-sort" className="sr-only">Trier les histoires</label>
+              <select id="journal-sort" value={sort} onChange={(e) => {setSort(e.target.value); resetPage()}} className="h-11 w-full appearance-none rounded-xl border border-[#dbe7f5] bg-white py-2 pl-3.5 pr-9 text-sm font-medium text-slate-700 outline-none transition hover:border-[#8cb9e9] focus:ring-2 focus:ring-blue-100">
+                <option value="-date">Plus récentes</option><option value="date">Plus anciennes</option><option value="title">Titre A–Z</option><option value="-title">Titre Z–A</option>
+              </select>
+              <ChevronDown size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"/>
+            </div>
+            <button type="button" onClick={() => setShowAdvancedFilters((v) => !v)} aria-expanded={showAdvancedFilters} aria-controls="journal-advanced-filters" className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition ${showAdvancedFilters || mood || dateFrom || dateTo ? 'border-[#80ade1] bg-[#e8f3ff] text-[#245b95]' : 'border-[#dbe7f5] bg-white text-slate-700 hover:border-[#8cb9e9] hover:bg-[#f4f9ff]'}`}><SlidersHorizontal size={16}/> Filtres{(mood || dateFrom || dateTo) && <span className="grid size-5 place-items-center rounded-full bg-[#b58b56] text-[11px] text-white">{[mood,dateFrom,dateTo].filter(Boolean).length}</span>}<ChevronDown size={14} className={`transition-transform ${showAdvancedFilters ? 'rotate-180' : ''}`}/></button>
+          </div>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <Select value={sort} onChange={(e) => { setSort(e.target.value); resetPage() }}>
-            <option value="-date">Plus récent</option>
-            <option value="date">Plus ancien</option>
-            <option value="title">Titre A–Z</option>
-            <option value="-title">Titre Z–A</option>
-          </Select>
-          <Select value={mood} onChange={(e) => { setMood(e.target.value); resetPage() }}>
-            <option value="">Toutes les humeurs</option>
-            {Object.keys(moodColors).map((x) => <option key={x} value={x}>{x}</option>)}
-          </Select>
-          <Select value={status} onChange={(e) => { setStatus(e.target.value); resetPage() }}>
-            <option value="all">Toutes les entrées</option>
-            <option value="favorite">Favoris</option>
-            <option value="draft">Brouillons</option>
-            <option value="published">Publiées</option>
-          </Select>
-          <Button variant="secondary" onClick={() => {
-            setQ(""); setDebouncedQ(""); setSort("-date"); setMood(""); setStatus("all");
-            setDateFrom(""); setDateTo(""); setPage(1)
-          }}>Réinitialiser les filtres</Button>
+        <div className="flex flex-wrap items-center gap-2 border-t border-[#e6eef9] px-4 py-3">
+          <span className="mr-1 hidden text-[11px] font-semibold uppercase tracking-[0.12em] text-[#6988ab] sm:inline">Afficher</span>
+          {[{value:'all',label:'Toutes'},{value:'favorite',label:'Favoris',icon:Heart},{value:'pinned',label:'Épinglées',icon:Pin},{value:'draft',label:'Brouillons'},{value:'published',label:'Publiées'}].map((filter) => <button key={filter.value} type="button" aria-pressed={status === filter.value} onClick={() => {setStatus(filter.value); resetPage()}} className={`inline-flex min-h-9 items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${status === filter.value ? 'bg-[#17477e] text-white shadow-sm' : 'bg-[#f1f6fc] text-[#5e7899] hover:bg-[#e1efff] hover:text-slate-900'}`}>{filter.icon && <filter.icon size={13}/>} {filter.label}</button>)}
+          {(q || sort !== '-date' || mood || status !== 'all' || dateFrom || dateTo) && <button type="button" onClick={() => {setQ('');setDebouncedQ('');setSort('-date');setMood('');setStatus('all');setDateFrom('');setDateTo('');setPage(1)}} className="ml-auto inline-flex min-h-9 items-center gap-1.5 rounded-full px-3 text-xs font-semibold text-[#3676b6] transition hover:bg-blue-50"><RotateCcw size={13}/> Réinitialiser</button>}
         </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Input label="Date de début" type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); resetPage() }} />
-          <Input label="Date de fin" type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); resetPage() }} />
-        </div>
-      </Card>
+        {showAdvancedFilters && <div id="journal-advanced-filters" className="border-t border-[#dce9f8] bg-[#f7fbff] px-4 py-4 sm:px-5">
+          <div className="mb-3 flex items-center justify-between gap-2"><p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#5279a3]">Affiner la recherche</p><button type="button" onClick={() => setShowAdvancedFilters(false)} className="rounded-lg p-1.5 text-slate-500 transition hover:bg-[#dce9f8]" aria-label="Fermer les filtres avancés"><X size={16}/></button></div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div><label htmlFor="journal-mood-filter" className="mb-1.5 block text-xs font-medium text-slate-600">Humeur</label><select id="journal-mood-filter" value={mood} onChange={(e) => {setMood(e.target.value); resetPage()}} className="h-11 w-full rounded-xl border border-[#dbe7f5] bg-white px-3 text-sm text-slate-700 outline-none focus:border-[#6fa7e5]"><option value="">Toutes les humeurs</option>{Object.keys(moodColors).map((x) => <option key={x} value={x}>{x}</option>)}</select></div>
+            <div><label htmlFor="journal-date-from" className="mb-1.5 block text-xs font-medium text-slate-600">Du</label><input id="journal-date-from" type="date" value={dateFrom} max={dateTo || undefined} onChange={(e) => {setDateFrom(e.target.value); resetPage()}} className="h-11 w-full rounded-xl border border-[#dbe7f5] bg-white px-3 text-sm text-slate-700 outline-none focus:border-[#6fa7e5]"/></div>
+            <div><label htmlFor="journal-date-to" className="mb-1.5 block text-xs font-medium text-slate-600">Au</label><input id="journal-date-to" type="date" value={dateTo} min={dateFrom || undefined} onChange={(e) => {setDateTo(e.target.value); resetPage()}} className="h-11 w-full rounded-xl border border-[#dbe7f5] bg-white px-3 text-sm text-slate-700 outline-none focus:border-[#6fa7e5]"/></div>
+          </div>
+        </div>}
+      </section>
       {listError && <p className="mb-4 text-sm text-red-600" role="alert">{listError}</p>}
-      <p className="mb-3 text-sm text-slate-500">{count} entrée(s) trouvée(s) {listLoading ? "· Recherche en cours..." : ""}</p>
-      {listLoading ? <p>Chargement du journal...</p> : results.length ? (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {results.map((x) => <Card key={x.id} className="group p-5">
-            <div className="flex justify-between">
-              <div className="flex gap-2">
-                <Badge className="bg-violet-50 text-violet-700">{x.mood}</Badge>
-                {x.draft && <Badge>Brouillon</Badge>}
+      <div className="mb-4 flex items-center justify-between gap-3"><p className="text-sm font-medium text-slate-500">{count} résultat{count > 1 ? 's' : ''}{listLoading ? ' · Recherche en cours...' : ''}</p><span className="text-xs text-slate-400">Page {page} sur {totalPages}</span></div>
+      {listLoading ? <div className="rounded-2xl border border-slate-200 bg-white p-12 text-center text-slate-500" role="status">Chargement de vos souvenirs...</div> : results.length ? (
+        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+          {results.map((x) => <article key={x.id} className="group relative flex min-h-[290px] flex-col overflow-hidden rounded-[22px] border border-[#d9e7f7] bg-white transition duration-300 hover:-translate-y-1 hover:border-[#a5c8ed] hover:shadow-[0_20px_45px_-28px_rgba(38,43,55,.35)]">
+            <div className="flex flex-1 flex-col p-6 md:p-7">
+              <div className="flex items-start justify-between gap-3">
+                <span className="inline-flex items-center gap-2 rounded-full bg-[#f0f6ff] px-3 py-1.5 text-[11px] font-semibold text-slate-700"><span className="size-2 rounded-full" style={{backgroundColor:moodColors[x.mood] || '#94a3b8'}}/>{x.mood || 'Sans humeur'}</span>
+                <div className="flex gap-1">
+                  <button type="button" className="grid size-9 place-items-center rounded-xl text-slate-400 transition hover:bg-blue-50 hover:text-blue-700" title={x.pinned ? 'Désépingler' : 'Épingler'} aria-label={x.pinned ? 'Désépingler' : 'Épingler'} onClick={() => togglePinned(x)}><Pin size={16} className={x.pinned ? 'fill-blue-600 text-blue-600' : ''}/></button>
+                  <button type="button" className="grid size-9 place-items-center rounded-xl text-slate-400 transition hover:bg-rose-50 hover:text-rose-600" title={x.favorite ? 'Retirer des favoris' : 'Ajouter aux favoris'} aria-label={x.favorite ? 'Retirer des favoris' : 'Ajouter aux favoris'} onClick={() => toggleFavorite(x)}><Heart size={17} className={x.favorite ? 'fill-rose-500 text-rose-500' : ''}/></button>
+                </div>
               </div>
-              <button aria-label={x.favorite ? "Retirer des favoris" : "Ajouter aux favoris"} onClick={() => toggleFavorite(x)}>
-                <Heart size={18} className={x.favorite ? "fill-rose-500 text-rose-500" : "text-slate-300"} />
-              </button>
+              <Link to={`/journal/${x.id}`} className="mt-6 block flex-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#3d89d8]">
+                <div className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-[#628bb7]"><CalendarDays size={13}/>{x.date}{x.draft && <span className="ml-2 rounded bg-blue-50 px-2 py-0.5 text-blue-700">Brouillon</span>}</div>
+                <h2 className="line-clamp-2 break-words font-serif text-[30px] font-medium leading-tight tracking-[-0.04em] text-[#173c70] transition group-hover:text-[#286fb7]">{x.title || 'Sans titre'}</h2>
+                <p className="mt-4 line-clamp-3 whitespace-pre-line break-words text-[14px] leading-[1.85] text-slate-500">{x.content || 'Une page à compléter...'}</p>
+              </Link>
+              <div className="mt-7 flex items-center justify-between gap-3 border-t border-[#e4edf8] pt-4">
+                <div className="flex min-w-0 flex-wrap gap-1.5">{(x.tags || []).slice(0,2).map((t) => <span key={t} className="max-w-28 truncate rounded-md bg-[#edf5ff] px-2 py-1 text-[11px] text-[#577da6]">#{t}</span>)}</div>
+                <Link to={`/journal/${x.id}`} className="inline-flex shrink-0 items-center gap-2 text-sm font-semibold text-[#275e9b] transition group-hover:gap-3">Ouvrir <ArrowUpRight size={16}/></Link>
+              </div>
             </div>
-            <Link to={`/journal/${x.id}`}>
-              <h2 className="mt-4 text-lg font-extrabold group-hover:text-violet-600">{x.title}</h2>
-              <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-500">{x.content}</p>
-            </Link>
-            <div className="mt-4 flex items-center gap-2 border-t border-slate-100 pt-4 text-xs text-slate-400">
-              <CalendarDays size={14} />{x.date}
-              <div className="ml-auto flex gap-1">{(x.tags || []).slice(0, 2).map((t) => <span key={t}>#{t}</span>)}</div>
-            </div>
-          </Card>)}
+          </article>)}
         </div>
-      ) : <Empty title="Aucune entrée trouvée" />}
+      ) : <div className="rounded-[24px] border border-dashed border-slate-300 bg-white px-6 py-16 text-center"><BookOpen className="mx-auto mb-4 text-slate-300" size={38}/><h2 className="text-xl font-semibold text-slate-900">Aucune page trouvée</h2><p className="mt-2 text-sm text-slate-500">Essayez d'autres filtres ou commencez une nouvelle histoire.</p><Link to="/journal/new" className={`${actionPrimary} mt-6`}><Plus size={16}/> Nouvelle entrée</Link></div>}
       {count > pageSize && (
         <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
           <Button variant="secondary" disabled={page <= 1 || listLoading} onClick={() => setPage((n) => n - 1)}>Précédent</Button>
@@ -764,29 +956,99 @@ export function JournalPage({ mode = "list" }) {
   )
 }
 
-export function MoodPage({ mode = "dashboard" }) {
-  const { moods, setMoods, notify } = useStore(),
-    nav = useNavigate(),
-    { id } = useParams()
-  const [filter, setFilter] = useState("Tous"),
-    [form, setForm] = useState({
-      mood: "Calme",
-      intensity: 3,
-      note: "",
-      date: "2026-02-18",
+function localDateInput(value) {
+  const date = value ? new Date(value) : new Date()
+  if (Number.isNaN(date.getTime())) return ""
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+  return local.toISOString().slice(0, 10)
+}
+
+function toApiDateTime(dateStr) {
+  const [year, month, day] = dateStr.split("-").map(Number)
+  const now = new Date()
+  return new Date(year, month - 1, day, now.getHours(), now.getMinutes(), 0, 0).toISOString()
+}
+
+function formatMoodDate(value) {
+  if (!value) return ""
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return date.toLocaleString("fr-FR", { dateStyle: "medium", timeStyle: "short" })
+}
+
+function formatAverage(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "—"
+  return `${Number(value).toLocaleString("fr-FR", { maximumFractionDigits: 1 })}/5`
+}
+
+function moodQuery(period, moodType, dateFrom, dateTo) {
+  const params = {}
+  if (moodType) params.mood = moodType
+  if (period && period !== "all" && period !== "custom") params.period = period
+  if (period === "custom") {
+    params.period = "custom"
+    if (dateFrom) params.date_from = dateFrom
+    if (dateTo) params.date_to = dateTo
+  }
+  return params
+}
+
+function listItems(response) {
+  if (Array.isArray(response)) return { items: response, count: response.length }
+  return { items: response?.results || [], count: response?.count || 0 }
+}
+
+function MoodFilters({ moodType, setMoodType, period, setPeriod, dateFrom, setDateFrom, dateTo, setDateTo }) {
+  return (
+    <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <Select label="Humeur" value={moodType} onChange={(e) => setMoodType(e.target.value)}>
+        <option value="">Toutes les humeurs</option>
+        {Object.keys(moodColors).map((x) => <option key={x} value={x}>{x}</option>)}
+      </Select>
+      <Select label="Période" value={period} onChange={(e) => setPeriod(e.target.value)}>
+        <option value="all">Toutes les dates</option>
+        <option value="today">Aujourd’hui</option>
+        <option value="week">Cette semaine</option>
+        <option value="month">Ce mois</option>
+        <option value="custom">Période personnalisée</option>
+      </Select>
+      {period === "custom" && (
+        <>
+          <Input label="Du" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+          <Input label="Au" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+        </>
+      )}
+    </div>
+  )
+}
+
+function MoodForm({ initial, busy, error, title, subtitle, submitLabel, onSubmit }) {
+  const [form, setForm] = useState(initial)
+  const [localError, setLocalError] = useState("")
+  const submit = (e) => {
+    e.preventDefault()
+    setLocalError("")
+    if (form.date > localDateInput()) {
+      setLocalError("La date ne peut pas être dans le futur.")
+      return
+    }
+    onSubmit({
+      mood: form.mood,
+      intensity: Number(form.intensity),
+      note: form.note.trim(),
+      date: toApiDateTime(form.date),
     })
-  if (mode === "new")
-    return (
-      <>
-        <PageHeader
-          title="Comment vous sentez-vous ?"
-          subtitle="Il n’y a pas de bonne ou de mauvaise réponse."
-        />
-        <Card className="mx-auto max-w-3xl p-6">
+  }
+  return (
+    <>
+      <PageHeader title={title} subtitle={subtitle} />
+      <Card className="mx-auto max-w-3xl p-6">
+        <form onSubmit={submit}>
           <div className="grid grid-cols-3 gap-3 sm:grid-cols-5">
             {Object.keys(moodColors).map((x) => (
               <button
                 key={x}
+                type="button"
                 onClick={() => setForm({ ...form, mood: x })}
                 className={`rounded-2xl border p-4 text-center text-sm font-bold ${
                   form.mood === x
@@ -794,18 +1056,13 @@ export function MoodPage({ mode = "dashboard" }) {
                     : "border-slate-200"
                 }`}
               >
-                <Smile
-                  className="mx-auto mb-2"
-                  style={{ color: moodColors[x] }}
-                />
+                <Smile className="mx-auto mb-2" style={{ color: moodColors[x] }} />
                 {x}
               </button>
             ))}
           </div>
           <div className="mt-7">
-            <label className="text-sm font-bold">
-              Intensité : {form.intensity}/5
-            </label>
+            <label className="text-sm font-bold">Intensité : {form.intensity}/5</label>
             <input
               type="range"
               min="1"
@@ -827,52 +1084,257 @@ export function MoodPage({ mode = "dashboard" }) {
             value={form.date}
             onChange={(e) => setForm({ ...form, date: e.target.value })}
           />
-          <Button
-            className="mt-6"
-            onClick={() => {
-              setMoods([{ ...form, id: crypto.randomUUID() }, ...moods])
-              notify("Humeur enregistrée")
-              nav("/mood")
-            }}
-          >
-            Enregistrer mon humeur
+          {(localError || error) && (
+            <p className="mt-4 text-sm text-red-600" role="alert">{localError || error}</p>
+          )}
+          <Button className="mt-6" disabled={busy}>
+            {busy ? "Enregistrement..." : submitLabel}
           </Button>
-        </Card>
-      </>
-    )
-  if (mode === "detail") {
-    const m = moods.find((x) => x.id === id)
-    return m ? (
-      <Card className="mx-auto max-w-xl p-8 text-center">
-        <Smile
-          className="mx-auto"
-          size={50}
-          style={{ color: moodColors[m.mood] }}
-        />
-        <h1 className="mt-4 text-3xl font-extrabold">{m.mood}</h1>
-        <p className="mt-2 text-slate-500">
-          {m.date} · Intensité {m.intensity}/5
-        </p>
-        <p className="mt-6 rounded-xl bg-slate-50 p-4">{m.note}</p>
-        <Link
-          className="mt-6 inline-block font-bold text-violet-600"
-          to="/mood/history"
-        >
-          Retour à l’historique
-        </Link>
+        </form>
       </Card>
-    ) : (
-      <Empty />
+    </>
+  )
+}
+
+function MoodDeleteModal({ item, busy, onClose, onConfirm }) {
+  return (
+    <Modal
+      open={Boolean(item)}
+      onClose={() => !busy && onClose()}
+      title="Supprimer cette humeur ?"
+      actions={
+        <>
+          <Button variant="secondary" disabled={busy} onClick={onClose}>Annuler</Button>
+          <Button variant="danger" disabled={busy} onClick={onConfirm}>
+            {busy ? "Suppression..." : "Confirmer"}
+          </Button>
+        </>
+      }
+    >
+      {item
+        ? `Cette action supprimera définitivement « ${item.mood} » du ${formatMoodDate(item.date)}.`
+        : null}
+    </Modal>
+  )
+}
+
+export function MoodPage({ mode = "dashboard" }) {
+  const { notify } = useStore()
+  const nav = useNavigate()
+  const { id } = useParams()
+  const [moodType, setMoodType] = useState("")
+  const [period, setPeriod] = useState("all")
+  const [dateFrom, setDateFrom] = useState("")
+  const [dateTo, setDateTo] = useState("")
+  const [items, setItems] = useState([])
+  const [total, setTotal] = useState(0)
+  const [listLoading, setListLoading] = useState(false)
+  const [listError, setListError] = useState("")
+  const [stats, setStats] = useState(null)
+  const [monthStats, setMonthStats] = useState(null)
+  const [statsLoading, setStatsLoading] = useState(false)
+  const [statsError, setStatsError] = useState("")
+  const [detail, setDetail] = useState(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [error, setError] = useState("")
+  const [confirm, setConfirm] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [revision, setRevision] = useState(0)
+  const [summaryDays, setSummaryDays] = useState(7)
+  const [summary, setSummary] = useState(null)
+  const [summaryLoading, setSummaryLoading] = useState(false)
+  const [summaryError, setSummaryError] = useState("")
+  const filters = useMemo(
+    () => moodQuery(period, moodType, dateFrom, dateTo),
+    [period, moodType, dateFrom, dateTo],
+  )
+  const recentRange = useMemo(() => {
+    const end = new Date()
+    const start = new Date()
+    start.setDate(end.getDate() - 13)
+    return { date_from: localDateInput(start), date_to: localDateInput(end) }
+  }, [])
+
+  useEffect(() => {
+    if (mode !== "history") return
+    let active = true
+    setListLoading(true)
+    setListError("")
+    moodService.getMoods({ ...filters, page_size: 100, ordering: "-date" })
+      .then((response) => {
+        if (!active) return
+        const parsed = listItems(response)
+        setItems(parsed.items)
+        setTotal(parsed.count)
+      })
+      .catch((err) => { if (active) setListError(err.message || "Impossible de charger l’historique.") })
+      .finally(() => { if (active) setListLoading(false) })
+    return () => { active = false }
+  }, [mode, filters, revision])
+
+  useEffect(() => {
+    if (mode !== "dashboard" && mode !== "insights") return
+    let active = true
+    setStatsLoading(true)
+    setStatsError("")
+    const request = mode === "insights"
+      ? moodService.getStats(filters).then((data) => ({ stats: data, month: null }))
+      : Promise.all([
+          moodService.getStats(recentRange),
+          moodService.getStats({ period: "month" }),
+        ]).then(([recent, month]) => ({ stats: recent, month }))
+    request
+      .then((data) => {
+        if (!active) return
+        setStats(data.stats)
+        setMonthStats(data.month)
+      })
+      .catch((err) => { if (active) setStatsError(err.message || "Impossible de charger les tendances.") })
+      .finally(() => { if (active) setStatsLoading(false) })
+    return () => { active = false }
+  }, [mode, filters, recentRange, revision])
+
+  useEffect(() => {
+    if ((mode !== "detail" && mode !== "edit") || !id) return
+    let active = true
+    setDetail(null)
+    setDetailLoading(true)
+    setError("")
+    moodService.getMood(id)
+      .then((entry) => { if (active) setDetail(entry) })
+      .catch((err) => { if (active) setError(err.message || "Humeur introuvable.") })
+      .finally(() => { if (active) setDetailLoading(false) })
+    return () => { active = false }
+  }, [id, mode])
+
+  const save = async (payload) => {
+    setBusy(true)
+    setError("")
+    try {
+      if (mode === "edit" && detail) {
+        await moodService.updateMood(detail.id, payload)
+        notify("Humeur modifiée")
+        nav(`/mood/${detail.id}`)
+      } else {
+        await moodService.createMood(payload)
+        notify("Humeur enregistrée")
+        nav("/mood")
+      }
+    } catch (err) {
+      setError(err.message || "Enregistrement impossible.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const generateSummary = async () => {
+    setSummaryLoading(true)
+    setSummaryError("")
+    setSummary(null)
+    try {
+      setSummary(await moodService.summarizeMoods(summaryDays))
+    } catch (err) {
+      setSummaryError(err.message || "Impossible de générer la synthèse.")
+    } finally {
+      setSummaryLoading(false)
+    }
+  }
+
+  const remove = async () => {
+    if (!confirm || busy) return
+    setBusy(true)
+    try {
+      await moodService.deleteMood(confirm.id)
+      notify("Humeur supprimée")
+      setConfirm(null)
+      if (mode === "detail") nav("/mood/history")
+      else setRevision((value) => value + 1)
+    } catch (err) {
+      notify(err.message || "Échec de la suppression", "error")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (mode === "new") {
+    return (
+      <MoodForm
+        initial={{ mood: "Calme", intensity: 3, note: "", date: localDateInput() }}
+        busy={busy}
+        error={error}
+        title="Comment vous sentez-vous ?"
+        subtitle="Il n’y a pas de bonne ou de mauvaise réponse."
+        submitLabel="Enregistrer mon humeur"
+        onSubmit={save}
+      />
     )
   }
-  const data = moods
-    .slice(0, 14)
-    .reverse()
-    .map((x, i) => ({ day: i + 1, value: x.intensity }))
-  const dist = Object.entries(
-    moods.reduce((a, x) => ({ ...a, [x.mood]: (a[x.mood] || 0) + 1 }), {}),
-  ).map(([name, value]) => ({ name, value }))
-  if (mode === "insights")
+
+  if (mode === "edit") {
+    if (detailLoading) return <Loading label="Chargement de l’humeur..." />
+    if (error) return <p role="alert" className="text-red-600">{error}</p>
+    if (!detail) return <Empty title="Humeur introuvable" text="Cet enregistrement n’existe pas ou ne vous appartient pas." />
+    return (
+      <MoodForm
+        key={detail.id}
+        initial={{
+          mood: detail.mood,
+          intensity: detail.intensity,
+          note: detail.note || "",
+          date: localDateInput(detail.date),
+        }}
+        busy={busy}
+        error={error}
+        title="Modifier cette humeur"
+        subtitle="Ajustez l’émotion, l’intensité ou la note."
+        submitLabel="Enregistrer les modifications"
+        onSubmit={save}
+      />
+    )
+  }
+
+  if (mode === "detail") {
+    if (detailLoading) return <Loading label="Chargement de l’humeur..." />
+    if (error && !detail) return <p role="alert" className="text-red-600">{error}</p>
+    if (!detail) return <Empty title="Humeur introuvable" text="Cet enregistrement n’existe pas ou ne vous appartient pas." />
+    return (
+      <>
+        <Card className="mx-auto max-w-xl p-8 text-center">
+          <Smile className="mx-auto" size={50} style={{ color: moodColors[detail.mood] || "#6c63ff" }} />
+          <h1 className="mt-4 text-3xl font-extrabold">{detail.mood}</h1>
+          <p className="mt-2 text-slate-500">{formatMoodDate(detail.date)} · Intensité {detail.intensity}/5</p>
+          <p className="mt-6 rounded-xl bg-slate-50 p-4">{detail.note || "Aucune note."}</p>
+          <div className="mt-6 flex flex-wrap justify-center gap-2">
+            <Link to={`/mood/${detail.id}/edit`}><Button variant="secondary"><Edit3 size={16} /> Modifier</Button></Link>
+            <Button variant="danger" onClick={() => setConfirm(detail)}><Trash2 size={16} /> Supprimer</Button>
+            <Link to="/mood/history" className="inline-flex items-center font-bold text-violet-600">Retour à l’historique</Link>
+          </div>
+        </Card>
+        <MoodDeleteModal item={confirm} busy={busy} onClose={() => setConfirm(null)} onConfirm={remove} />
+      </>
+    )
+  }
+
+  const chart = (stats?.intensity_over_time || []).map((point) => ({
+    day: new Date(point.date).toLocaleDateString("fr-FR", { day: "2-digit", month: "short" }),
+    value: point.intensity,
+    mood: point.mood,
+  }))
+  const distribution = stats?.distribution || []
+
+  if (mode === "insights") {
+    const observations = []
+    if (stats && stats.count === 0) {
+      observations.push("Aucune humeur ne correspond à cette période.")
+    } else if (stats) {
+      observations.push(`Vous avez enregistré ${stats.count} humeur${stats.count > 1 ? "s" : ""} sur cette période.`)
+      if (stats.average_intensity !== null) {
+        observations.push(`L’intensité moyenne est de ${formatAverage(stats.average_intensity)}.`)
+      }
+      if (distribution[0]) {
+        observations.push(`L’humeur la plus fréquente est « ${distribution[0].mood} » (${distribution[0].count}).`)
+      }
+    }
     return (
       <>
         <PageHeader
@@ -880,97 +1342,171 @@ export function MoodPage({ mode = "dashboard" }) {
           subtitle="Des observations informatives sur les données que vous avez enregistrées."
         />
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          Ces tendances sont informatives et ne constituent ni un avis médical
-          ni un diagnostic psychologique.
+          Ces tendances sont informatives et ne constituent ni un avis médical ni un diagnostic psychologique.
         </div>
-        <div className="mt-5 grid gap-5 lg:grid-cols-2">
-          <Card className="p-5">
-            <SectionTitle title="Humeurs fréquentes" />
-            <div className="h-64">
-              <ResponsiveContainer>
-                <PieChart>
-                  <Pie
-                    data={dist}
-                    dataKey="value"
-                    innerRadius={55}
-                    outerRadius={85}
-                  >
-                    {dist.map((x, i) => (
-                      <Cell
-                        key={x.name}
-                        fill={Object.values(moodColors)[i % 9]}
-                      />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          </Card>
-          <Card className="p-5">
-            <SectionTitle title="Suggestions douces" />
-            <ul className="space-y-3 text-sm text-slate-600">
-              {[
-                "Vos notes calmes mentionnent souvent des moments de pause.",
-                "Les journées d’étude sont souvent associées à la motivation.",
-                "Préserver une courte pause les jours chargés pourrait vous aider.",
-              ].map((x) => (
-                <li key={x} className="rounded-xl bg-slate-50 p-4">
-                  {x}
-                </li>
-              ))}
-            </ul>
-          </Card>
+        <div className="mt-5">
+          <MoodFilters
+            moodType={moodType} setMoodType={setMoodType}
+            period={period} setPeriod={setPeriod}
+            dateFrom={dateFrom} setDateFrom={setDateFrom}
+            dateTo={dateTo} setDateTo={setDateTo}
+          />
         </div>
+        {statsLoading && <Loading label="Chargement des tendances..." />}
+        {statsError && <p role="alert" className="mb-4 text-sm text-red-600">{statsError}</p>}
+        {!statsLoading && !statsError && (
+          <div className="grid gap-5 lg:grid-cols-2">
+            <Card className="p-5">
+              <SectionTitle title="Humeurs fréquentes" />
+              {distribution.length ? (
+                <div className="h-64">
+                  <ResponsiveContainer>
+                    <PieChart>
+                      <Pie data={distribution} dataKey="count" nameKey="mood" innerRadius={55} outerRadius={85}>
+                        {distribution.map((entry) => (
+                          <Cell key={entry.mood} fill={moodColors[entry.mood] || "#6c63ff"} />
+                        ))}
+                      </Pie>
+                      <Tooltip />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : <p className="text-sm text-slate-500">Aucune humeur enregistrée.</p>}
+            </Card>
+            <Card className="p-5">
+              <SectionTitle title="Évolution de l’intensité" />
+              {chart.length ? (
+                <div className="h-64">
+                  <ResponsiveContainer>
+                    <AreaChart data={chart}>
+                      <XAxis dataKey="day" />
+                      <YAxis domain={[0, 5]} />
+                      <Tooltip />
+                      <Area dataKey="value" stroke="#6C63FF" fill="#ede9fe" />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : <p className="text-sm text-slate-500">Aucune intensité à afficher.</p>}
+            </Card>
+            <Card className="p-5 lg:col-span-2">
+              <SectionTitle
+                title="Synthèse descriptive"
+                subtitle="Les chiffres sont calculés par l’application. Le texte n’apparaît que s’il a été rédigé par le modèle local."
+              />
+              <div className="mb-4 flex flex-wrap items-end gap-3">
+                <Select
+                  label="Période"
+                  value={String(summaryDays)}
+                  onChange={(e) => {
+                    setSummaryDays(Number(e.target.value))
+                    setSummary(null)
+                    setSummaryError("")
+                  }}
+                >
+                  <option value={7}>7 jours</option>
+                  <option value={14}>14 jours</option>
+                  <option value={30}>30 jours</option>
+                </Select>
+                <Button variant="ai" disabled={summaryLoading} onClick={generateSummary}>
+                  <Sparkles size={16} /> {summaryLoading ? "Rédaction..." : "Générer la synthèse"}
+                </Button>
+              </div>
+              {summaryLoading && <Loading label="Le modèle local rédige la synthèse..." />}
+              {summaryError && <p role="alert" className="text-sm text-red-600">{summaryError}</p>}
+              {summary && (
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-700">
+                    <p className="font-extrabold text-slate-950">Statistiques calculées</p>
+                    <p className="mt-2">{summary.statistics.count} enregistrement{summary.statistics.count > 1 ? "s" : ""} · intensité moyenne {formatAverage(summary.statistics.average_intensity)}</p>
+                    <p className="mt-1">
+                      {summary.statistics.most_frequent?.length
+                        ? `Humeurs les plus fréquentes : ${summary.statistics.most_frequent.map((item) => `${item.mood} (${item.count})`).join(", ")}.`
+                        : "Aucune humeur sur cette période."}
+                    </p>
+                    {summary.statistics.variation ? (
+                      <p className="mt-1">
+                        Intensité moyenne : {summary.statistics.variation.first_average}/5 le {summary.statistics.variation.first_day}, puis {summary.statistics.variation.last_average}/5 le {summary.statistics.variation.last_day}.
+                      </p>
+                    ) : (
+                      <p className="mt-1">Pas assez de jours différents pour décrire une évolution.</p>
+                    )}
+                  </div>
+                  <div className="rounded-xl border border-cyan-100 bg-cyan-50 p-4 text-sm text-cyan-950">
+                    <p className="font-extrabold">Texte du modèle</p>
+                    {summary.summary_status === "generated" && summary.summary ? (
+                      <p className="mt-2 leading-6">{summary.summary}</p>
+                    ) : (
+                      <p className="mt-2 leading-6">{summary.message || "Aucune synthèse n’a été rédigée."}</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </Card>
+            <Card className="p-5 lg:col-span-2">
+              <SectionTitle title="Observations" />
+              <ul className="space-y-3 text-sm text-slate-600">
+                {observations.map((line) => (
+                  <li key={line} className="rounded-xl bg-slate-50 p-4">{line}</li>
+                ))}
+              </ul>
+            </Card>
+          </div>
+        )}
       </>
     )
-  if (mode === "history")
+  }
+
+  if (mode === "history") {
     return (
       <>
         <PageHeader
           title="Historique des humeurs"
           actions={
             <Link to="/mood/new">
-              <Button>
-                <Plus /> Nouveau check-in
-              </Button>
+              <Button><Plus /> Nouveau check-in</Button>
             </Link>
           }
         />
-        <Select
-          className="mb-5 max-w-xs"
-          label="Filtrer"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-        >
-          <option>Tous</option>
-          {Object.keys(moodColors).map((x) => (
-            <option key={x}>{x}</option>
-          ))}
-        </Select>
+        <MoodFilters
+          moodType={moodType} setMoodType={setMoodType}
+          period={period} setPeriod={setPeriod}
+          dateFrom={dateFrom} setDateFrom={setDateFrom}
+          dateTo={dateTo} setDateTo={setDateTo}
+        />
+        {listLoading && <Loading label="Chargement de l’historique..." />}
+        {listError && <p role="alert" className="mb-4 text-sm text-red-600">{listError}</p>}
+        {!listLoading && !listError && items.length === 0 && (
+          <Empty
+            title="Aucune humeur"
+            text="Aucun enregistrement ne correspond à ces filtres."
+            action={<Link to="/mood/new"><Button><Plus /> Enregistrer mon humeur</Button></Link>}
+          />
+        )}
         <div className="space-y-3">
-          {moods
-            .filter((x) => filter === "Tous" || x.mood === filter)
-            .map((x) => (
-              <Card key={x.id} className="flex items-center gap-4 p-4">
-                <Smile style={{ color: moodColors[x.mood] }} />
-                <Link to={`/mood/${x.id}`} className="flex-1">
-                  <b>{x.mood}</b>
-                  <p className="text-sm text-slate-500">{x.note}</p>
-                </Link>
-                <Badge>{x.intensity}/5</Badge>
-                <span className="text-xs text-slate-400">{x.date}</span>
-                <button
-                  onClick={() => setMoods(moods.filter((m) => m.id !== x.id))}
-                  aria-label="Supprimer"
-                >
-                  <Trash2 size={17} className="text-slate-400" />
-                </button>
-              </Card>
-            ))}
+          {items.map((entry) => (
+            <Card key={entry.id} className="flex items-center gap-4 p-4">
+              <Smile style={{ color: moodColors[entry.mood] || "#6c63ff" }} />
+              <Link to={`/mood/${entry.id}`} className="flex-1">
+                <b>{entry.mood}</b>
+                <p className="text-sm text-slate-500">{entry.note || "Aucune note."}</p>
+              </Link>
+              <Badge>{entry.intensity}/5</Badge>
+              <span className="text-xs text-slate-400">{formatMoodDate(entry.date)}</span>
+              <Link to={`/mood/${entry.id}/edit`} aria-label="Modifier"><Edit3 size={17} className="text-slate-400" /></Link>
+              <button type="button" onClick={() => setConfirm(entry)} aria-label="Supprimer">
+                <Trash2 size={17} className="text-slate-400" />
+              </button>
+            </Card>
+          ))}
         </div>
+        {!listLoading && total > items.length && (
+          <p className="mt-4 text-sm text-slate-500">Affichage des {items.length} humeurs les plus récentes sur {total}.</p>
+        )}
+        <MoodDeleteModal item={confirm} busy={busy} onClose={() => setConfirm(null)} onConfirm={remove} />
       </>
     )
+  }
+
   return (
     <>
       <PageHeader
@@ -978,45 +1514,48 @@ export function MoodPage({ mode = "dashboard" }) {
         subtitle="Observez vos émotions avec douceur, sans jugement."
         actions={
           <>
-            <Link to="/mood/history">
-              <Button variant="secondary">Historique</Button>
-            </Link>
-            <Link to="/mood/insights">
-              <Button variant="secondary">Insights</Button>
-            </Link>
-            <Link to="/mood/new">
-              <Button>
-                <Plus /> Enregistrer
-              </Button>
-            </Link>
+            <Link to="/mood/history"><Button variant="secondary">Historique</Button></Link>
+            <Link to="/mood/insights"><Button variant="secondary">Insights</Button></Link>
+            <Link to="/mood/new"><Button><Plus /> Enregistrer</Button></Link>
           </>
         }
       />
-      <div className="grid gap-4 sm:grid-cols-3">
-        <Stat
-          label="Humeur actuelle"
-          value={moods[0]?.mood || "—"}
-          icon={Smile}
-        />
-        <Stat label="Moyenne mensuelle" value="3,8/5" icon={Heart} />
-        <Stat label="Check-ins" value={moods.length} icon={CalendarDays} />
-      </div>
-      <Card className="mt-5 p-5">
-        <SectionTitle title="Les 14 derniers jours" />
-        <div className="h-72">
-          <ResponsiveContainer>
-            <AreaChart data={data}>
-              <XAxis dataKey="day" />
-              <YAxis domain={[0, 5]} />
-              <Tooltip />
-              <Area dataKey="value" stroke="#6C63FF" fill="#ede9fe" />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-      </Card>
+      {statsLoading && <Loading label="Chargement de vos humeurs..." />}
+      {statsError && <p role="alert" className="mb-4 text-sm text-red-600">{statsError}</p>}
+      {!statsLoading && !statsError && (
+        <>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Stat label="Humeur actuelle" value={stats?.latest?.mood || "—"} icon={Smile} />
+            <Stat label="Moyenne mensuelle" value={formatAverage(monthStats?.average_intensity)} icon={Heart} />
+            <Stat label="Check-ins" value={monthStats?.count ?? 0} icon={CalendarDays} />
+          </div>
+          <Card className="mt-5 p-5">
+            <SectionTitle title="Les 14 derniers jours" />
+            {chart.length ? (
+              <div className="h-72">
+                <ResponsiveContainer>
+                  <AreaChart data={chart}>
+                    <XAxis dataKey="day" />
+                    <YAxis domain={[0, 5]} />
+                    <Tooltip />
+                    <Area dataKey="value" stroke="#6C63FF" fill="#ede9fe" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <Empty
+                title="Pas encore d’humeur"
+                text="Vos prochains enregistrements apparaîtront ici."
+                action={<Link to="/mood/new"><Button><Plus /> Enregistrer mon humeur</Button></Link>}
+              />
+            )}
+          </Card>
+        </>
+      )}
     </>
   )
 }
+
 export function MediaPage({ mode = "library" }) {
   const { media, setMedia, notify, uploadMedia } = useStore(),
     nav = useNavigate(),

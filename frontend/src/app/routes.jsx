@@ -82,6 +82,7 @@ const shell = [
   { path: "mood/new", element: <MoodPage mode="new" /> },
   { path: "mood/history", element: <MoodPage mode="history" /> },
   { path: "mood/insights", element: <MoodPage mode="insights" /> },
+  { path: "mood/:id/edit", element: <MoodPage mode="edit" /> },
   { path: "mood/:id", element: <MoodPage mode="detail" /> },
 
   { path: "media", element: <MediaPage /> },

@@ -42,6 +42,8 @@ class JournalEntry(models.Model):
 
     favorite = models.BooleanField(default=False)
 
+    pinned = models.BooleanField(default=False)
+
     draft = models.BooleanField(default=False)
 
     created_at = models.DateTimeField(auto_now_add=True)
