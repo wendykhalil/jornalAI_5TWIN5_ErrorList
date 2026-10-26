@@ -21,11 +21,14 @@ SECRET_KEY = os.getenv(
     "django-insecure-dev-key-change-before-production",
 )
 
-DEBUG = os.getenv("DJANGO_DEBUG", "True").lower() == "true"
+DEBUG = os.getenv("DJANGO_DEBUG", "False").lower() == "true"
 
+_default_hosts = (
+    "127.0.0.1,localhost,mindlog-ai.swedencentral.cloudapp.azure.com,20.240.53.98"
+)
 ALLOWED_HOSTS = [
     host.strip()
-    for host in os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
+    for host in os.getenv("DJANGO_ALLOWED_HOSTS", _default_hosts).split(",")
     if host.strip()
 ]
 
@@ -126,6 +129,7 @@ USE_TZ = True
 
 # Static files
 STATIC_URL = "static/"
+STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
 
 # Media files (user uploads)
 MEDIA_URL = "/media/"
@@ -168,12 +172,58 @@ SIMPLE_JWT = {
 }
 
 # CORS Configuration for frontend integration
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:8443",
-    "http://localhost:5173",
-    "http://127.0.0.1:8443",
-    "http://127.0.0.1:5173",
-    "http://192.168.1.179:8443",
-]
+_raw_cors = os.getenv("CORS_ALLOWED_ORIGINS")
+if _raw_cors:
+    CORS_ALLOWED_ORIGINS = [
+        origin.strip() for origin in _raw_cors.split(",") if origin.strip()
+    ]
+else:
+    CORS_ALLOWED_ORIGINS = [
+        "https://mindlog-ai.swedencentral.cloudapp.azure.com",
+        "http://mindlog-ai.swedencentral.cloudapp.azure.com",
+        "https://20.240.53.98",
+        "http://20.240.53.98",
+        "http://localhost:8443",
+        "http://localhost:5173",
+        "http://127.0.0.1:8443",
+        "http://127.0.0.1:5173",
+        "http://192.168.1.179:8443",
+    ]
 
 CORS_ALLOW_CREDENTIALS = True
+
+# CSRF Trusted Origins (required for requests through reverse proxy)
+_raw_csrf = os.getenv("CSRF_TRUSTED_ORIGINS")
+if _raw_csrf:
+    CSRF_TRUSTED_ORIGINS = [
+        origin.strip() for origin in _raw_csrf.split(",") if origin.strip()
+    ]
+else:
+    CSRF_TRUSTED_ORIGINS = [
+        "https://mindlog-ai.swedencentral.cloudapp.azure.com",
+        "http://mindlog-ai.swedencentral.cloudapp.azure.com",
+        "https://20.240.53.98",
+        "http://20.240.53.98",
+        "http://localhost:8443",
+        "http://localhost:5173",
+        "http://127.0.0.1:8443",
+        "http://127.0.0.1:5173",
+    ]
+
+# Reverse Proxy SSL Header
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+# Nginx X-Accel-Redirect for high-speed authenticated private media streaming
+USE_X_ACCEL_REDIRECT = os.getenv("USE_X_ACCEL_REDIRECT", "False").lower() == "true"
+
+# Production Security Headers (when DEBUG=False)
+if not DEBUG:
+    SESSION_COOKIE_SECURE = (
+        os.getenv("SESSION_COOKIE_SECURE", "True").lower() == "true"
+    )
+    CSRF_COOKIE_SECURE = (
+        os.getenv("CSRF_COOKIE_SECURE", "True").lower() == "true"
+    )
+    SECURE_BROWSER_XSS_FILTER = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    X_FRAME_OPTIONS = "DENY"

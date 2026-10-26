@@ -388,3 +388,110 @@ class MediaViewSet(viewsets.ModelViewSet):
                 {"error": "Erreur inattendue lors de l'édition d'image.", "code": "edit_error"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+def get_authenticated_user_from_request(request):
+    """
+    Extracts authenticated user from:
+    1. Standard DRF/Django request.user (if already authenticated)
+    2. HTTP Authorization header: Bearer <token>
+    3. Secure, HttpOnly Cookie: access_token=<token>
+    (Query parameter tokens are strictly prohibited for security).
+    """
+    if getattr(request, "user", None) and request.user.is_authenticated:
+        return request.user
+
+    raw_token = None
+    auth_header = request.headers.get("Authorization") or request.META.get("HTTP_AUTHORIZATION", "")
+    if auth_header.startswith("Bearer "):
+        raw_token = auth_header.split(" ", 1)[1].strip()
+
+    if not raw_token:
+        raw_token = request.COOKIES.get("access_token")
+
+    if not raw_token:
+        return None
+
+    from django.contrib.auth import get_user_model
+    from rest_framework_simplejwt.tokens import AccessToken
+    from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+
+    User = get_user_model()
+    try:
+        validated_token = AccessToken(raw_token)
+        user_id = validated_token.get("user_id")
+        if not user_id:
+            return None
+        return User.objects.filter(pk=user_id, is_active=True).first()
+    except (InvalidToken, TokenError, Exception):
+        return None
+
+
+def serve_private_media(request, file_path):
+    """
+    Secure endpoint for private user media files.
+    Enforces authentication and per-user authorization.
+
+    In production (with Nginx): returns X-Accel-Redirect header for high-performance streaming.
+    In development/testing: serves file via Django FileResponse.
+    """
+    import mimetypes
+    import os
+    import sys
+    from django.conf import settings
+    from django.http import HttpResponse, HttpResponseForbidden, FileResponse, Http404
+    from django.db.models import Q
+
+    # 1. Path normalization and traversal protection
+    clean_path = os.path.normpath(file_path).lstrip("/")
+    if clean_path.startswith("..") or os.path.isabs(clean_path):
+        return HttpResponseForbidden("Chemin d'accès invalide.")
+
+    # 2. Authentication check
+    user = get_authenticated_user_from_request(request)
+    if not user or not user.is_authenticated:
+        return HttpResponse("Authentification requise pour accéder à ce média.", status=401)
+
+    # 3. Per-user Authorization check
+    is_authorized = user.is_staff or user.is_superuser
+    if not is_authorized:
+        path_without_media = clean_path.removeprefix("media/").lstrip("/")
+        is_authorized = Media.objects.filter(
+            Q(file=clean_path) |
+            Q(file=f"media/{clean_path}") |
+            Q(file=path_without_media) |
+            Q(file=f"media/{path_without_media}"),
+            user=user
+        ).exists()
+
+    if not is_authorized:
+        return HttpResponseForbidden("Accès refusé : vous n'avez pas l'autorisation d'accéder à ce média.")
+
+    # 4. Verify physical file existence
+    full_disk_path = os.path.join(settings.MEDIA_ROOT, clean_path)
+    if not os.path.isfile(full_disk_path):
+        alt_path = os.path.join(settings.MEDIA_ROOT, clean_path.removeprefix("media/").lstrip("/"))
+        if os.path.isfile(alt_path):
+            full_disk_path = alt_path
+
+    if not os.path.isfile(full_disk_path):
+        raise Http404("Fichier média introuvable sur le disque.")
+
+    # 5. Determine MIME type
+    content_type, _ = mimetypes.guess_type(full_disk_path)
+    if not content_type:
+        content_type = "application/octet-stream"
+
+    # 6. Service via X-Accel-Redirect (Nginx production) or FileResponse (Dev/Testing)
+    use_accel = getattr(settings, "USE_X_ACCEL_REDIRECT", False)
+    is_testing = "test" in sys.argv or getattr(settings, "IS_TESTING", False)
+
+    if use_accel and not is_testing:
+        rel_to_media_root = os.path.relpath(full_disk_path, settings.MEDIA_ROOT).lstrip("/")
+        response = HttpResponse()
+        response["X-Accel-Redirect"] = f"/protected_media/{rel_to_media_root}"
+        response["Content-Type"] = content_type
+        response["Cache-Control"] = "private, max-age=604800"
+        return response
+
+    return FileResponse(open(full_disk_path, "rb"), content_type=content_type)

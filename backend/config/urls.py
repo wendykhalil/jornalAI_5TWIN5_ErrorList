@@ -1,8 +1,7 @@
 
 from django.contrib import admin
 from django.urls import path, include
-from django.conf import settings
-from django.conf.urls.static import static
+from apps.media.views import serve_private_media
 
 
 urlpatterns = [
@@ -25,11 +24,7 @@ urlpatterns = [
 
     # Goals & Habits Management API
     path("api/", include("apps.goals.urls")),
-]
 
-# Serve media files in development
-if settings.DEBUG:
-    urlpatterns += static(
-        settings.MEDIA_URL,
-        document_root=settings.MEDIA_ROOT
-    )
+    # Private Media File Access (Authenticated & Per-User Authorized)
+    path("media/<path:file_path>", serve_private_media, name="private-media"),
+]

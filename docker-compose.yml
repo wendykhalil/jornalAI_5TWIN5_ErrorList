@@ -1,0 +1,123 @@
+services:
+  db:
+    image: mariadb:10.11
+    container_name: jornal_db
+    restart: unless-stopped
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --default-storage-engine=INNODB
+      --innodb-buffer-pool-size=512M
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-jornal_ai}
+      MYSQL_USER: ${DB_USER:-jornal_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - jornal_net
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: jornal_ollama
+    restart: unless-stopped
+    environment:
+      # Memory and concurrency controls to prevent RAM exhaustion on 16GB VM:
+      # Process 1 request at a time and keep at most 1 model in memory
+      - OLLAMA_NUM_PARALLEL=1
+      - OLLAMA_MAX_LOADED_MODELS=1
+      # Unload idle models after 5 minutes to release RAM for Whisper and MariaDB
+      - OLLAMA_KEEP_ALIVE=5m
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - jornal_net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: jornal_backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+      - path: backend/.env
+        required: false
+    environment:
+      - DB_HOST=db
+      - DB_PORT=3306
+      - OLLAMA_URL=http://ollama:11434/api/generate
+      - OLLAMA_VISION_URL=http://ollama:11434/api/generate
+      - OLLAMA_EMBED_URL=http://ollama:11434/api/embeddings
+      - WHISPER_MODEL=${WHISPER_MODEL:-base}
+      - WHISPER_DEVICE=cpu
+      - WHISPER_COMPUTE_TYPE=int8
+      - WHISPER_MAX_CONCURRENT=1
+      - USE_X_ACCEL_REDIRECT=True
+    volumes:
+      - media_data:/app/backend/media
+      - static_data:/app/backend/staticfiles
+      - whisper_cache:/root/.cache/huggingface
+    networks:
+      - jornal_net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_BASE_URL=/api
+    container_name: jornal_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - media_data:/app/backend/media:ro
+      - static_data:/app/backend/staticfiles:ro
+      - ssl_certs:/etc/nginx/ssl/live
+      - certbot_www:/var/www/certbot
+    networks:
+      - jornal_net
+
+volumes:
+  mariadb_data:
+    name: jornal_mariadb_data
+  media_data:
+    name: jornal_media_data
+  static_data:
+    name: jornal_static_data
+  ollama_data:
+    name: jornal_ollama_data
+  whisper_cache:
+    name: jornal_whisper_cache
+  ssl_certs:
+    name: jornal_ssl_certs
+  certbot_www:
+    name: jornal_certbot_www
+
+networks:
+  jornal_net:
+    name: jornal_network
+    driver: bridge

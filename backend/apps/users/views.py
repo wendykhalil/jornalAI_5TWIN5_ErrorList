@@ -4,6 +4,8 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.views import TokenRefreshView
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
@@ -13,6 +15,27 @@ from .serializers import (
 )
 
 User = get_user_model()
+
+
+class CustomTokenRefreshView(TokenRefreshView):
+    """
+    TokenRefreshView subclass that also refreshes the Secure, HttpOnly access_token cookie.
+    """
+    def post(self, request, *args, **kwargs):
+        response = super().post(request, *args, **kwargs)
+        if response.status_code == 200:
+            access_token = response.data.get("access")
+            if access_token:
+                response.set_cookie(
+                    "access_token",
+                    access_token,
+                    max_age=3600 * 24,
+                    httponly=True,
+                    secure=not settings.DEBUG,
+                    samesite="Lax",
+                    path="/",
+                )
+        return response
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
@@ -28,7 +51,19 @@ def register_view(request):
 def login_view(request):
     serializer = LoginSerializer(data=request.data)
     if serializer.is_valid():
-        return Response(serializer.validated_data, status=status.HTTP_200_OK)
+        response = Response(serializer.validated_data, status=status.HTTP_200_OK)
+        access_token = serializer.validated_data.get("access")
+        if access_token:
+            response.set_cookie(
+                "access_token",
+                access_token,
+                max_age=3600 * 24,
+                httponly=True,
+                secure=not settings.DEBUG,
+                samesite="Lax",
+                path="/",
+            )
+        return response
     return Response(serializer.errors, status=status.HTTP_401_UNAUTHORIZED)
 
 @api_view(["POST"])
@@ -42,7 +77,9 @@ def logout_view(request):
         if str(token.payload.get("user_id")) != str(request.user.pk):
             return Response({"detail": "Refresh token does not belong to this user."}, status=status.HTTP_403_FORBIDDEN)
         token.blacklist()
-        return Response({"message": "Logged out successfully."}, status=status.HTTP_200_OK)
+        response = Response({"message": "Logged out successfully."}, status=status.HTTP_200_OK)
+        response.delete_cookie("access_token", path="/", samesite="Lax")
+        return response
     except TokenError:
         return Response({"detail": "Invalid or expired refresh token."}, status=status.HTTP_400_BAD_REQUEST)
 

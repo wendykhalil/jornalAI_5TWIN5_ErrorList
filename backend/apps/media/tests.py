@@ -11,6 +11,7 @@ from django.core.files.storage import default_storage
 from django.db import transaction
 from rest_framework.test import APITestCase
 from rest_framework import status
+from rest_framework_simplejwt.tokens import RefreshToken
 from apps.media.models import Media
 from apps.media.services import AudioTranscriptionService
 from apps.media.ai_services import (
@@ -1472,3 +1473,178 @@ class MediaAiImageAPITest(APITestCase):
         current_file_bytes = self.image_media.file.read()
         self.image_media.file.close()
         self.assertEqual(current_file_bytes, orig_file_bytes)
+
+
+class PrivateMediaSecurityRegressionTest(APITestCase):
+    """
+    Regression and security test suite for authenticated private media serving.
+    Verifies:
+    1. Anonymous access is strictly rejected (401).
+    2. Query string tokens (?token=...) are completely ignored (401).
+    3. Bearer token in Authorization header allows access to owner (200).
+    4. Secure, HttpOnly access_token cookie allows access to owner (200).
+    5. Another authenticated user is forbidden from viewing private media (403).
+    6. Staff / admin user has access (200).
+    7. Path traversal attempts are blocked (403).
+    8. Nonexistent files return 404.
+    9. Login sets HttpOnly, SameSite=Lax cookie.
+    10. Logout clears the cookie.
+    11. Token refresh updates the HttpOnly cookie.
+    """
+
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            username="owner_user",
+            email="owner@example.com",
+            password="StrongPassword123!",
+        )
+        self.other_user = User.objects.create_user(
+            username="other_user",
+            email="other@example.com",
+            password="StrongPassword123!",
+        )
+        self.staff_user = User.objects.create_user(
+            username="staff_user",
+            email="staff@example.com",
+            password="StrongPassword123!",
+            is_staff=True,
+        )
+
+        # Create physical media file owned by self.owner
+        self.test_content = VALID_JPEG_BYTES + b"_private_user_photo_data"
+        self.media_obj = Media.objects.create(
+            user=self.owner,
+            title="Private Journal Photo",
+            media_type="image",
+            file=SimpleUploadedFile(
+                "private_photo.jpg",
+                self.test_content,
+                content_type="image/jpeg",
+            ),
+        )
+        self.file_path = self.media_obj.file.name
+        self.media_url = f"/media/{self.file_path}"
+
+        # Generate tokens
+        self.owner_refresh = RefreshToken.for_user(self.owner)
+        self.owner_token = str(self.owner_refresh.access_token)
+
+        self.other_refresh = RefreshToken.for_user(self.other_user)
+        self.other_token = str(self.other_refresh.access_token)
+
+        self.staff_refresh = RefreshToken.for_user(self.staff_user)
+        self.staff_token = str(self.staff_refresh.access_token)
+
+    def tearDown(self):
+        if self.media_obj.file:
+            self.media_obj.file.delete(save=False)
+        super().tearDown()
+
+    def test_anonymous_access_returns_401(self):
+        response = self.client.get(self.media_url)
+        self.assertEqual(response.status_code, 401)
+
+    def test_query_string_token_is_rejected_returns_401(self):
+        """Query parameter ?token=... must be rejected per security requirements."""
+        url_with_token = f"{self.media_url}?token={self.owner_token}"
+        response = self.client.get(url_with_token)
+        self.assertEqual(response.status_code, 401)
+
+    def test_owner_access_with_bearer_token_returns_200(self):
+        response = self.client.get(
+            self.media_url,
+            HTTP_AUTHORIZATION=f"Bearer {self.owner_token}",
+        )
+        self.assertEqual(response.status_code, 200)
+        content = (
+            b"".join(response.streaming_content)
+            if hasattr(response, "streaming_content")
+            else response.content
+        )
+        self.assertEqual(content, self.test_content)
+
+    def test_owner_access_with_httponly_cookie_returns_200(self):
+        self.client.cookies["access_token"] = self.owner_token
+        response = self.client.get(self.media_url)
+        self.assertEqual(response.status_code, 200)
+        content = (
+            b"".join(response.streaming_content)
+            if hasattr(response, "streaming_content")
+            else response.content
+        )
+        self.assertEqual(content, self.test_content)
+
+    def test_other_user_access_returns_403_forbidden(self):
+        response = self.client.get(
+            self.media_url,
+            HTTP_AUTHORIZATION=f"Bearer {self.other_token}",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_other_user_access_with_cookie_returns_403_forbidden(self):
+        self.client.cookies["access_token"] = self.other_token
+        response = self.client.get(self.media_url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_staff_user_can_access_returns_200(self):
+        response = self.client.get(
+            self.media_url,
+            HTTP_AUTHORIZATION=f"Bearer {self.staff_token}",
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_path_traversal_is_blocked_returns_403(self):
+        traversal_url = "/media/../../etc/passwd"
+        response = self.client.get(
+            traversal_url,
+            HTTP_AUTHORIZATION=f"Bearer {self.owner_token}",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_nonexistent_file_returns_404(self):
+        fake_url = "/media/media/2026/01/01/nonexistent_file.jpg"
+        response = self.client.get(
+            fake_url,
+            HTTP_AUTHORIZATION=f"Bearer {self.staff_token}",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_login_sets_httponly_cookie_and_logout_clears_it(self):
+        # 1. Login sets HttpOnly, SameSite=Lax cookie
+        login_res = self.client.post(
+            "/api/auth/login/",
+            {"username_or_email": "owner_user", "password": "StrongPassword123!"},
+            format="json",
+        )
+        self.assertEqual(login_res.status_code, 200)
+        self.assertIn("access_token", login_res.cookies)
+        cookie = login_res.cookies["access_token"]
+        self.assertTrue(cookie["httponly"])
+        self.assertEqual(cookie["samesite"].lower(), "lax")
+        self.assertEqual(cookie["path"], "/")
+
+        # 2. Logout clears the cookie
+        refresh_token = login_res.data["refresh"]
+        access_token = login_res.data["access"]
+        logout_res = self.client.post(
+            "/api/auth/logout/",
+            {"refresh": refresh_token},
+            HTTP_AUTHORIZATION=f"Bearer {access_token}",
+            format="json",
+        )
+        self.assertEqual(logout_res.status_code, 200)
+        self.assertIn("access_token", logout_res.cookies)
+        logout_cookie = logout_res.cookies["access_token"]
+        self.assertEqual(logout_cookie.value, "")
+
+    def test_token_refresh_updates_httponly_cookie(self):
+        refresh_res = self.client.post(
+            "/api/auth/token/refresh/",
+            {"refresh": str(self.owner_refresh)},
+            format="json",
+        )
+        self.assertEqual(refresh_res.status_code, 200)
+        self.assertIn("access_token", refresh_res.cookies)
+        cookie = refresh_res.cookies["access_token"]
+        self.assertTrue(cookie["httponly"])
+        self.assertEqual(cookie["samesite"].lower(), "lax")

@@ -9,5 +9,5 @@ urlpatterns = [
     path("auth/logout/", views.logout_view, name="logout"),
     path("auth/me/", views.current_user_view, name="current-user"),
     path("auth/change-password/", views.change_password_view, name="change-password"),
-    path("auth/token/refresh/", TokenRefreshView.as_view(), name="token-refresh"),
+    path("auth/token/refresh/", views.CustomTokenRefreshView.as_view(), name="token-refresh"),
 ]
