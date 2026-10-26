@@ -125,3 +125,71 @@ class MediaAPITest(APITestCase):
         response = self.client.delete(f"/api/media/{media.id}/")
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.assertFalse(Media.objects.filter(id=media.id).exists())
+
+    def test_patch_media_json(self):
+        """Test updating media title and description using PATCH with application/json"""
+        file = SimpleUploadedFile(
+            "test.jpg", b"file_content", content_type="image/jpeg"
+        )
+        media = Media.objects.create(
+            user=self.user,
+            title="Original Title",
+            description="Original Description",
+            media_type="image",
+            file=file,
+        )
+        original_file_name = media.file.name
+        original_user_id = media.user.id
+
+        payload = {
+            "title": "Updated Title via JSON",
+            "description": "Updated Description via JSON",
+        }
+        response = self.client.patch(
+            f"/api/media/{media.id}/",
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["title"], "Updated Title via JSON")
+        self.assertEqual(response.data["description"], "Updated Description via JSON")
+
+        media.refresh_from_db()
+        self.assertEqual(media.title, "Updated Title via JSON")
+        self.assertEqual(media.description, "Updated Description via JSON")
+        self.assertEqual(media.user.id, original_user_id)
+        self.assertEqual(media.file.name, original_file_name)
+
+    def test_cannot_modify_other_user_media(self):
+        """Test that a user cannot modify another user's media"""
+        other_user = User.objects.create_user(
+            username="otheruser", email="other@example.com", password="testpass123"
+        )
+        file = SimpleUploadedFile(
+            "other.jpg", b"other_content", content_type="image/jpeg"
+        )
+        other_media = Media.objects.create(
+            user=other_user,
+            title="Other User Original Title",
+            description="Other User Original Description",
+            media_type="image",
+            file=file,
+        )
+
+        payload = {
+            "title": "Unauthorized Modification Attempt",
+            "description": "Should Not Succeed",
+        }
+        response = self.client.patch(
+            f"/api/media/{other_media.id}/",
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+        other_media.refresh_from_db()
+        self.assertEqual(other_media.title, "Other User Original Title")
+        self.assertEqual(other_media.description, "Other User Original Description")
+        self.assertEqual(other_media.user, other_user)
