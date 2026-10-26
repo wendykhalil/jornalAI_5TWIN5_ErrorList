@@ -18,3 +18,4 @@ pypdf==6.21.2
 gunicorn>=22.0.0
 faster-whisper==1.2.1
 av==18.1.0
+reportlab==5.1.0
