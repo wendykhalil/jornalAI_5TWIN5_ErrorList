@@ -1,12 +1,47 @@
 
-import authService from "./authService"
+import authService from "./authService.js"
 
 const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL ||
+  (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE_URL) ||
   "http://localhost:8000/api"
 ).replace(/\/+$/, "")
 
 const MEDIA_URL = `${API_BASE_URL}/media/`
+
+/**
+ * Safely resolves an absolute URL even when MEDIA_URL is relative (e.g. /api/media/).
+ * Works in both browser environments (window.location.origin) and SSR/tests.
+ */
+export function getSafeBaseUrl(url = MEDIA_URL) {
+  if (typeof url === "string" && /^https?:\/\//i.test(url)) {
+    return new URL(url)
+  }
+  const origin =
+    typeof window !== "undefined" && window.location?.origin
+      ? window.location.origin
+      : "http://localhost:8000"
+  return new URL(url, origin)
+}
+
+/**
+ * Safely resolves the next pagination URL relative to the base media URL.
+ */
+export function getSafeNextUrl(next, baseUrl) {
+  if (typeof next === "string" && /^https?:\/\//i.test(next)) {
+    return new URL(next)
+  }
+  return new URL(next, baseUrl)
+}
+
+/**
+ * Builds the final URL for media API requests without duplicating slashes.
+ */
+export function buildMediaRequestUrl(endpoint = "") {
+  if (!endpoint) return MEDIA_URL
+  if (endpoint.startsWith("?")) return `${MEDIA_URL}${endpoint}`
+  const cleanEndpoint = endpoint.replace(/^\/+/, "")
+  return `${MEDIA_URL}${cleanEndpoint}`
+}
 
 const ALLOWED_TYPES = [
   "image/jpeg",
@@ -64,7 +99,7 @@ async function mediaRequest(
   const { accessToken } = authService.getTokens()
 
   const response = await fetch(
-    `${MEDIA_URL}${endpoint}`,
+    buildMediaRequestUrl(endpoint),
     {
       ...options,
       headers: {
@@ -206,7 +241,7 @@ export const mediaPhotoService = {
     let endpoint = ""
     const visited = new Set()
 
-    const baseUrl = new URL(MEDIA_URL)
+    const baseUrl = getSafeBaseUrl(MEDIA_URL)
 
     while (true) {
       if (visited.has(endpoint)) {
@@ -223,16 +258,19 @@ export const mediaPhotoService = {
         break
       }
 
-      const nextUrl = new URL(
+      const nextUrl = getSafeNextUrl(
         response.next,
-        MEDIA_URL
+        baseUrl
       )
 
-      if (
-        nextUrl.origin !== baseUrl.origin ||
-        nextUrl.pathname.replace(/\/+$/, "") !==
-          baseUrl.pathname.replace(/\/+$/, "")
-      ) {
+      const isSameHost =
+        nextUrl.hostname === baseUrl.hostname ||
+        nextUrl.origin === baseUrl.origin
+      const isSamePath =
+        nextUrl.pathname.replace(/\/+$/, "") ===
+        baseUrl.pathname.replace(/\/+$/, "")
+
+      if (!isSameHost || !isSamePath) {
         throw new Error(
           "Pagination média invalide."
         )

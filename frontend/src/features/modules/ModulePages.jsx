@@ -311,9 +311,22 @@ function EntryForm({ item }) {
         throw new Error("Certains médias sélectionnés ne sont plus accessibles. Retirez-les puis réessayez : " + missing.join(", "))
       }
       const uploaded = []
+      const successfullyUploadedFiles = new Set()
       for (const file of newFiles) {
         const photo = await mediaPhotoService.uploadAttachment(file)
-        uploaded.push(photo.id)
+        if (photo?.id) {
+          const photoId = String(photo.id)
+          uploaded.push(photoId)
+          successfullyUploadedFiles.add(file)
+          setSelectedIds((prev) => [...new Set([...prev, photoId])])
+          setAvailablePhotos((prev) => [
+            ...prev.filter((p) => String(p.id) !== photoId),
+            photo,
+          ])
+        }
+      }
+      if (successfullyUploadedFiles.size > 0) {
+        setNewFiles((prev) => prev.filter((f) => !successfullyUploadedFiles.has(f)))
       }
       // Confirm each uploaded UUID is visible through the authenticated media API.
       if (uploaded.length) {
