@@ -27,6 +27,46 @@ DEFAULT_DEVICE = "cpu"
 DEFAULT_COMPUTE_TYPE = "int8"
 DEFAULT_MAX_CONCURRENT = 2
 
+# Ephemeral audio prompt configuration
+MAX_PROMPT_AUDIO_SIZE = 10 * 1024 * 1024  # 10 Mo
+MAX_PROMPT_AUDIO_DURATION = 30.0          # 30 secondes
+ALLOWED_PROMPT_AUDIO_EXTENSIONS = {".webm", ".ogg", ".wav", ".mp3", ".m4a"}
+
+
+def detect_audio_signature(header: bytes) -> str | None:
+    """
+    Detects the audio format from the file's initial magic bytes.
+    Returns format identifier ('webm', 'ogg', 'wav', 'mp3', 'm4a') or None.
+    """
+    if len(header) < 2:
+        return None
+
+    # EBML (WebM / Matroska) : begins with \x1A\x45\xDF\xA3
+    if header.startswith(b"\x1a\x45\xdf\xa3"):
+        return "webm"
+
+    # OGG container : begins with OggS
+    if header.startswith(b"OggS"):
+        return "ogg"
+
+    # RIFF WAV : begins with RIFF and has WAVE at offset 8..12
+    if header.startswith(b"RIFF") and len(header) >= 12 and header[8:12] == b"WAVE":
+        return "wav"
+
+    # MP3 : ID3 tag or MPEG sync word (first 11 bits set: 0xFF followed by 0xE0 mask)
+    if header.startswith(b"ID3"):
+        return "mp3"
+    if len(header) >= 2 and header[0] == 0xFF and (header[1] & 0xE0) == 0xE0:
+        return "mp3"
+
+    # ISO BMFF (M4A) : begins with ftyp at offset 4..8
+    if len(header) >= 12 and header[4:8] == b"ftyp":
+        major_brand = header[8:12].lower()
+        if major_brand in (b"m4a ", b"m4b ", b"isom", b"mp42"):
+            return "m4a"
+
+    return None
+
 
 # ============================================================================
 # CUSTOM EXCEPTIONS
@@ -54,6 +94,11 @@ class AudioFileNotFoundError(AudioTranscriptionError):
 
 class InvalidAudioFileError(AudioTranscriptionError):
     """Raised when the file is not audio, empty, or corrupted."""
+    pass
+
+
+class AudioDurationExceededError(AudioTranscriptionError):
+    """Raised when the audio duration exceeds the allowed limit (e.g. 30 seconds)."""
     pass
 
 
@@ -269,3 +314,155 @@ class AudioTranscriptionService:
                 }
         finally:
             cls._concurrency_semaphore.release()
+
+    @classmethod
+    def transcribe_audio_prompt(
+        cls,
+        audio_file,
+        max_duration: float = MAX_PROMPT_AUDIO_DURATION,
+    ) -> dict:
+        """
+        Transcribes an ephemeral voice prompt for AI generation/editing.
+        Validates size (<= 10MB), extension, magic bytes, decodability via PyAV,
+        and enforces maximum duration (<= 30s) both via container metadata and decoded audio.
+        Guarantees temporary file cleanup under all circumstances.
+        Does NOT persist any Media instance to the database.
+
+        Parameters:
+            audio_file (UploadedFile): The temporary uploaded audio file.
+            max_duration (float): Maximum allowed duration in seconds (default 30.0s).
+
+        Returns:
+            dict: {
+                "text": str,        # Transcribed prompt text
+                "language": str,    # Detected language code (e.g. 'fr', 'en')
+                "duration": float,  # Audio duration in seconds
+            }
+
+        Raises:
+            InvalidAudioFileError: If file is missing, empty, oversized, invalid extension/signature or undecodable.
+            AudioDurationExceededError: If duration exceeds max_duration.
+            NoSpeechDetectedError: If no audible speech is detected.
+            AudioTranscriptionUnavailableError: If faster-whisper is not installed.
+            AudioTranscriptionBusyError: If the service is saturated.
+            AudioTranscriptionError: On other internal transcription failures.
+        """
+        if not audio_file:
+            raise InvalidAudioFileError("Aucun fichier audio n'a été fourni.")
+
+        file_size = getattr(audio_file, "size", 0)
+        if file_size <= 0:
+            raise InvalidAudioFileError("Le fichier audio fourni est vide (0 octet).")
+
+        if file_size > MAX_PROMPT_AUDIO_SIZE:
+            size_mb = round(file_size / (1024 * 1024), 1)
+            raise InvalidAudioFileError(
+                f"Le fichier audio ({size_mb} Mo) dépasse la limite maximale autorisée de 10 Mo."
+            )
+
+        file_name = getattr(audio_file, "name", "") or "prompt.webm"
+        suffix = Path(file_name).suffix.lower()
+
+        if suffix not in ALLOWED_PROMPT_AUDIO_EXTENSIONS:
+            raise InvalidAudioFileError(
+                f"L'extension '{suffix}' n'est pas autorisée. Formats acceptés : WebM, OGG, WAV, MP3, M4A."
+            )
+
+        # Validate magic bytes / signature
+        header = audio_file.read(32)
+        if hasattr(audio_file, "seek"):
+            audio_file.seek(0)
+
+        detected_format = detect_audio_signature(header)
+        if detected_format is None:
+            raise InvalidAudioFileError(
+                "La signature binaire du fichier ne correspond pas à un format audio autorisé (WebM, OGG, WAV, MP3, M4A)."
+            )
+
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
+                temp_path = temp_file.name
+                if hasattr(audio_file, "chunks"):
+                    for chunk in audio_file.chunks():
+                        temp_file.write(chunk)
+                else:
+                    temp_file.write(audio_file.read())
+
+            # Format decodability & container duration validation via PyAV
+            try:
+                import av
+                with av.open(temp_path) as container:
+                    if not container.streams.audio:
+                        raise InvalidAudioFileError("Le fichier ne contient aucun flux audio valide.")
+                    if container.duration is not None:
+                        container_duration = float(container.duration / av.time_base)
+                        if container_duration > max_duration:
+                            raise AudioDurationExceededError(
+                                f"La durée de l'audio ({container_duration:.1f}s) dépasse la limite maximale autorisée de {max_duration:.0f} secondes."
+                            )
+            except AudioDurationExceededError:
+                raise
+            except InvalidAudioFileError:
+                raise
+            except Exception as exc:
+                logger.error("Audio container probe failure on '%s': %s", temp_path, exc)
+                raise InvalidAudioFileError(f"Le fichier audio est corrompu ou illisible: {exc}") from exc
+
+            # Concurrency throttle: acquire semaphore with 2-second timeout
+            acquired = cls._concurrency_semaphore.acquire(blocking=True, timeout=2.0)
+            if not acquired:
+                raise AudioTranscriptionBusyError(
+                    "Le service de transcription est actuellement surchargé. Veuillez réessayer dans quelques instants."
+                )
+
+            try:
+                model = cls.get_model()
+                try:
+                    segments_generator, info = model.transcribe(
+                        temp_path,
+                        beam_size=5,
+                        vad_filter=True,
+                    )
+                except Exception as exc:
+                    logger.error("Error during model.transcribe on prompt '%s': %s", temp_path, exc)
+                    raise AudioTranscriptionError(
+                        f"Échec du traitement audio par le moteur de transcription: {exc}"
+                    ) from exc
+
+                collected_segments = []
+                total_duration = getattr(info, "duration", 0.0) or 0.0
+
+                for segment in segments_generator:
+                    text_piece = segment.text.strip()
+                    if text_piece:
+                        collected_segments.append(text_piece)
+                    if hasattr(segment, "end") and segment.end is not None:
+                        total_duration = max(total_duration, float(segment.end))
+
+                if total_duration > max_duration:
+                    raise AudioDurationExceededError(
+                        f"La durée de l'audio ({total_duration:.1f}s) dépasse la limite maximale autorisée de {max_duration:.0f} secondes."
+                    )
+
+                full_text = " ".join(collected_segments).strip()
+                if not full_text:
+                    raise NoSpeechDetectedError(
+                        "Aucune parole audible n'a été détectée dans cet enregistrement vocal."
+                    )
+
+                detected_language = getattr(info, "language", "unknown") or "unknown"
+
+                return {
+                    "text": full_text,
+                    "language": detected_language,
+                    "duration": round(total_duration, 2),
+                }
+            finally:
+                cls._concurrency_semaphore.release()
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except OSError as exc:
+                    logger.warning("Could not delete temporary prompt audio file '%s': %s", temp_path, exc)

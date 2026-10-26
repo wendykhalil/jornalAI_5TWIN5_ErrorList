@@ -1,3 +1,6 @@
+import io
+import os
+import wave
 from unittest.mock import patch, MagicMock
 from django.test import TestCase
 from django.contrib.auth import get_user_model
@@ -18,6 +21,18 @@ VALID_PNG_BYTES = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\
 VALID_AUDIO_MP3_BYTES = b"ID3\x03\x00\x00\x00\x00\x00#TIT2\x00\x00\x00\x05\x00\x00\x00Test"
 VALID_AUDIO_WAV_BYTES = b"RIFF$\x08\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00D\xac\x00\x00\x88X\x01\x00\x02\x00\x10\x00data\x00\x08\x00\x00"
 VALID_PDF_BYTES = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF"
+
+
+def make_wav_bytes(duration_seconds: float = 1.0, sample_rate: int = 8000) -> bytes:
+    """Generates valid mono 16-bit PCM WAV bytes for testing."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        num_frames = int(sample_rate * duration_seconds)
+        wav_file.writeframes(b"\x00\x00" * num_frames)
+    return buf.getvalue()
 
 
 class MediaModelTest(TestCase):
@@ -694,3 +709,203 @@ class MediaTranscriptionAPITest(APITestCase):
         response = self.client.post(f"/api/media/{media.id}/transcribe/")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.data["code"], "invalid_audio")
+
+
+class MediaPromptTranscriptionAPITest(APITestCase):
+    """
+    Test suite for the ephemeral prompt transcription endpoint:
+    POST /api/media/transcribe-prompt/
+    Verifies JWT auth, file size/extension/signature/container validation,
+    30s duration enforcement, temporary file cleanup, and zero Media database writes.
+    """
+
+    def setUp(self):
+        AudioTranscriptionService.reset_model()
+        self.user = User.objects.create_user(
+            username="prompt_user",
+            email="prompt@example.com",
+            password="testpass123",
+        )
+        self.client.force_authenticate(user=self.user)
+        self.valid_wav_bytes = make_wav_bytes(duration_seconds=1.0)
+
+    def tearDown(self):
+        AudioTranscriptionService.reset_model()
+
+    def test_transcribe_prompt_unauthenticated_rejected(self):
+        """Test that unauthenticated requests to /api/media/transcribe-prompt/ are rejected with HTTP 401"""
+        self.client.force_authenticate(user=None)
+        audio = SimpleUploadedFile("prompt.wav", self.valid_wav_bytes, content_type="audio/wav")
+        response = self.client.post("/api/media/transcribe-prompt/", {"audio": audio}, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_transcribe_prompt_missing_file_rejected(self):
+        """Test that missing audio file returns HTTP 400 with code missing_audio"""
+        response = self.client.post("/api/media/transcribe-prompt/", {}, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "missing_audio")
+
+    def test_transcribe_prompt_empty_file_rejected(self):
+        """Test that an empty audio file (0 bytes) returns HTTP 400"""
+        empty_file = SimpleUploadedFile("prompt.wav", b"", content_type="audio/wav")
+        response = self.client.post("/api/media/transcribe-prompt/", {"audio": empty_file}, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "invalid_audio")
+
+    def test_transcribe_prompt_oversized_file_rejected(self):
+        """Test that an audio file exceeding 10 MB is rejected with HTTP 400"""
+        oversized_content = self.valid_wav_bytes + b"\x00" * (10 * 1024 * 1024 + 1024)
+        oversized = SimpleUploadedFile("prompt.wav", oversized_content, content_type="audio/wav")
+        response = self.client.post("/api/media/transcribe-prompt/", {"audio": oversized}, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "invalid_audio")
+        self.assertIn("10 Mo", response.data["error"])
+
+    def test_transcribe_prompt_forbidden_extension_rejected(self):
+        """Test that an audio file with forbidden extension (.exe, .sh) is rejected with HTTP 400"""
+        malicious = SimpleUploadedFile("prompt.exe", self.valid_wav_bytes, content_type="application/octet-stream")
+        response = self.client.post("/api/media/transcribe-prompt/", {"audio": malicious}, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "invalid_audio")
+
+    def test_transcribe_prompt_invalid_signature_rejected(self):
+        """Test that a file with .wav extension but invalid magic bytes is rejected with HTTP 400"""
+        fake_audio = SimpleUploadedFile("prompt.wav", b"This is not audio content at all!", content_type="audio/wav")
+        response = self.client.post("/api/media/transcribe-prompt/", {"audio": fake_audio}, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "invalid_audio")
+
+    def test_transcribe_prompt_duration_exceeded_rejected(self):
+        """Test that audio exceeding 30 seconds duration is rejected with HTTP 400 and code duration_exceeded"""
+        long_wav_bytes = make_wav_bytes(duration_seconds=35.0)
+        long_audio = SimpleUploadedFile("long_prompt.wav", long_wav_bytes, content_type="audio/wav")
+        response = self.client.post("/api/media/transcribe-prompt/", {"audio": long_audio}, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "duration_exceeded")
+        self.assertIn("30", response.data["error"])
+
+    @patch("apps.media.services.AudioTranscriptionService.get_model")
+    def test_transcribe_prompt_success_mocked(self, mock_get_model):
+        """
+        Test successful voice prompt transcription with mocked faster-whisper model.
+        Returns text, language, and duration.
+        """
+        mock_model = MagicMock()
+        mock_segment = MagicMock()
+        mock_segment.text = "Génère un chat astronaute sur la lune."
+        mock_segment.end = 3.2
+
+        mock_info = MagicMock()
+        mock_info.language = "fr"
+        mock_info.duration = 3.2
+
+        mock_model.transcribe.return_value = ([mock_segment], mock_info)
+        mock_get_model.return_value = mock_model
+
+        audio = SimpleUploadedFile("prompt.wav", self.valid_wav_bytes, content_type="audio/wav")
+        response = self.client.post("/api/media/transcribe-prompt/", {"audio": audio}, format="multipart")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["text"], "Génère un chat astronaute sur la lune.")
+        self.assertEqual(response.data["language"], "fr")
+        self.assertEqual(response.data["duration"], 3.2)
+
+    @patch("apps.media.services.AudioTranscriptionService.get_model")
+    def test_transcribe_prompt_accepts_file_field_name(self, mock_get_model):
+        """Test that endpoint also accepts 'file' as the multipart field name"""
+        mock_model = MagicMock()
+        mock_segment = MagicMock()
+        mock_segment.text = "Test prompt via file field."
+        mock_segment.end = 1.0
+        mock_info = MagicMock()
+        mock_info.language = "en"
+        mock_info.duration = 1.0
+
+        mock_model.transcribe.return_value = ([mock_segment], mock_info)
+        mock_get_model.return_value = mock_model
+
+        audio = SimpleUploadedFile("prompt.wav", self.valid_wav_bytes, content_type="audio/wav")
+        response = self.client.post("/api/media/transcribe-prompt/", {"file": audio}, format="multipart")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["text"], "Test prompt via file field.")
+
+    @patch("apps.media.services.AudioTranscriptionService.get_model")
+    def test_transcribe_prompt_no_speech_detected_returns_422(self, mock_get_model):
+        """Test that when audio has no audible speech, HTTP 422 is returned with code no_speech_detected"""
+        mock_model = MagicMock()
+        mock_info = MagicMock()
+        mock_info.language = "fr"
+        mock_info.duration = 1.0
+
+        mock_model.transcribe.return_value = ([], mock_info)
+        mock_get_model.return_value = mock_model
+
+        audio = SimpleUploadedFile("prompt.wav", self.valid_wav_bytes, content_type="audio/wav")
+        response = self.client.post("/api/media/transcribe-prompt/", {"audio": audio}, format="multipart")
+
+        self.assertEqual(response.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+        self.assertEqual(response.data["code"], "no_speech_detected")
+
+    @patch("apps.media.services.AudioTranscriptionService.get_model")
+    def test_transcribe_prompt_engine_error_returns_503(self, mock_get_model):
+        """Test that when the Whisper model crashes, HTTP 503 is returned with code transcription_error"""
+        mock_model = MagicMock()
+        mock_model.transcribe.side_effect = RuntimeError("CTranslate2 prompt failure")
+        mock_get_model.return_value = mock_model
+
+        audio = SimpleUploadedFile("prompt.wav", self.valid_wav_bytes, content_type="audio/wav")
+        response = self.client.post("/api/media/transcribe-prompt/", {"audio": audio}, format="multipart")
+
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertEqual(response.data["code"], "transcription_error")
+
+    @patch("apps.media.services.AudioTranscriptionService.get_model")
+    def test_transcribe_prompt_does_not_create_media_in_db(self, mock_get_model):
+        """Test that transcribe-prompt NEVER creates any Media record in the database"""
+        mock_model = MagicMock()
+        mock_segment = MagicMock()
+        mock_segment.text = "Ephemeral prompt."
+        mock_segment.end = 1.0
+        mock_info = MagicMock()
+        mock_info.language = "fr"
+        mock_info.duration = 1.0
+        mock_model.transcribe.return_value = ([mock_segment], mock_info)
+        mock_get_model.return_value = mock_model
+
+        initial_count = Media.objects.count()
+
+        audio = SimpleUploadedFile("prompt.wav", self.valid_wav_bytes, content_type="audio/wav")
+        response = self.client.post("/api/media/transcribe-prompt/", {"audio": audio}, format="multipart")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(Media.objects.count(), initial_count)
+
+    @patch("apps.media.services.AudioTranscriptionService.get_model")
+    def test_transcribe_prompt_guaranteed_tempfile_cleanup(self, mock_get_model):
+        """Test that temporary audio files created during transcribe-prompt are cleanly unlinked"""
+        mock_model = MagicMock()
+        mock_segment = MagicMock()
+        mock_segment.text = "Temporary file cleanup test."
+        mock_segment.end = 1.0
+        mock_info = MagicMock()
+        mock_info.language = "fr"
+        mock_info.duration = 1.0
+
+        temp_paths_created = []
+
+        def capture_transcribe(audio_path, **kwargs):
+            temp_paths_created.append(audio_path)
+            self.assertTrue(os.path.exists(audio_path), "Temp file must exist during inference")
+            return ([mock_segment], mock_info)
+
+        mock_model.transcribe.side_effect = capture_transcribe
+        mock_get_model.return_value = mock_model
+
+        audio = SimpleUploadedFile("prompt.wav", self.valid_wav_bytes, content_type="audio/wav")
+        response = self.client.post("/api/media/transcribe-prompt/", {"audio": audio}, format="multipart")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(temp_paths_created), 1)
+        created_path = temp_paths_created[0]
+        self.assertFalse(os.path.exists(created_path), "Temp file must be unlinked after request finishes")

@@ -17,6 +17,7 @@ from .services import (
     AudioTranscriptionBusyError,
     AudioFileNotFoundError,
     InvalidAudioFileError,
+    AudioDurationExceededError,
     NoSpeechDetectedError,
 )
 
@@ -161,6 +162,74 @@ class MediaViewSet(viewsets.ModelViewSet):
             return Response(
                 {
                     "error": "La transcription a échoué en raison d'une erreur interne.",
+                    "code": "transcription_error",
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+    @action(detail=False, methods=["post"], url_path="transcribe-prompt")
+    def transcribe_prompt(self, request):
+        """
+        Transcribe an ephemeral voice prompt for AI image generation/editing.
+        POST /api/media/transcribe-prompt/
+        Accepts multipart/form-data with field 'audio' or 'file'.
+        Protected by JWT authentication.
+        Does NOT create any Media record in the database.
+        Enforces a 10 MB size limit and a 30-second duration limit.
+        """
+        audio_file = request.FILES.get("audio") or request.FILES.get("file")
+        if not audio_file:
+            return Response(
+                {
+                    "error": "Aucun fichier audio n'a été fourni dans la requête.",
+                    "code": "missing_audio",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            result = AudioTranscriptionService.transcribe_audio_prompt(
+                audio_file=audio_file,
+                max_duration=30.0,
+            )
+            return Response(
+                {
+                    "text": result["text"],
+                    "language": result["language"],
+                    "duration": result["duration"],
+                },
+                status=status.HTTP_200_OK,
+            )
+        except AudioDurationExceededError as exc:
+            return Response(
+                {"error": str(exc), "code": "duration_exceeded"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except InvalidAudioFileError as exc:
+            return Response(
+                {"error": str(exc), "code": "invalid_audio"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except NoSpeechDetectedError as exc:
+            return Response(
+                {"error": str(exc), "code": "no_speech_detected"},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+        except AudioTranscriptionUnavailableError as exc:
+            return Response(
+                {"error": str(exc), "code": "service_unavailable"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except AudioTranscriptionBusyError as exc:
+            return Response(
+                {"error": str(exc), "code": "service_busy"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except AudioTranscriptionError as exc:
+            logger.error("Audio prompt transcription error: %s", exc)
+            return Response(
+                {
+                    "error": "La transcription a échoué en raison d'une erreur interne du moteur audio.",
                     "code": "transcription_error",
                 },
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
