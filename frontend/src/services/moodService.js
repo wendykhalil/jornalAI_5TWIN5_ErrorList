@@ -118,6 +118,54 @@ export const moodService = {
       body: JSON.stringify({ days }),
     })
   },
+
+  askAssistant(question) {
+    return moodRequest("assistant/", {
+      method: "POST",
+      body: JSON.stringify({ question }),
+    })
+  },
+
+  semanticSearch(query, limit = 5) {
+    return moodRequest("semantic-search/", {
+      method: "POST",
+      body: JSON.stringify({ query, limit }),
+    })
+  },
+
+  analyzeNote(id, { regenerate = false } = {}) {
+    return moodRequest(`${encodeURIComponent(id)}/analyze/`, {
+      method: "POST",
+      body: JSON.stringify({ regenerate }),
+    })
+  },
+
+  async extractOcr(file) {
+    const send = async (retry) => {
+      const { accessToken } = authService.getTokens()
+      const body = new FormData()
+      body.append("file", file)
+      const response = await fetch(`${MOOD_URL}ocr/`, {
+        method: "POST",
+        headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+        body,
+      })
+
+      if (response.status === 401 && retry) {
+        const refreshed = await authService.refreshAccessToken()
+        if (refreshed) return send(false)
+        throw new Error("Session expirée. Reconnectez-vous.")
+      }
+
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(errorMessage(data, `Erreur HTTP ${response.status}`))
+      }
+      return data
+    }
+
+    return send(true)
+  },
 }
 
 export default moodService

@@ -1,8 +1,10 @@
+import hashlib
+import uuid
+
 from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils import timezone
-import uuid
 
 
 class MoodCheck(models.Model):
@@ -55,3 +57,79 @@ class MoodCheck(models.Model):
 
     def __str__(self):
         return f"{self.mood} ({self.intensity}/5)"
+
+
+def mood_note_fingerprint(note):
+    """Hash of the stored note. The note text itself is not copied."""
+    return hashlib.sha256((note or "").encode("utf-8")).hexdigest()
+
+
+class MoodNoteAnalysis(models.Model):
+    """NLP reading of one check-in note. Deleted with the check-in."""
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+
+    mood_check = models.OneToOneField(
+        MoodCheck,
+        on_delete=models.CASCADE,
+        related_name="note_analysis",
+    )
+
+    emotions_secondary = models.JSONField(default=list)
+    themes = models.JSONField(default=list)
+    evidence = models.JSONField(default=list)
+    summary = models.TextField()
+    limitations = models.TextField(blank=True, default="")
+    model_name = models.CharField(max_length=128)
+    text_sha256 = models.CharField(max_length=64)
+    analyzed_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ["-analyzed_at"]
+
+    def __str__(self):
+        return f"Analyse {self.mood_check_id}"
+
+    def matches_note(self, note):
+        return self.text_sha256 == mood_note_fingerprint(note)
+
+
+class MoodNoteEmbedding(models.Model):
+    """Semantic vector of one check-in note. Deleted with the check-in.
+
+    The vector compares texts. It is not an emotion or a diagnosis.
+    """
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+
+    mood_check = models.OneToOneField(
+        MoodCheck,
+        on_delete=models.CASCADE,
+        related_name="note_embedding",
+    )
+
+    vector = models.JSONField()
+    dimensions = models.PositiveIntegerField()
+    text_sha256 = models.CharField(max_length=64)
+    model_name = models.CharField(max_length=128)
+    generated_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ["-generated_at"]
+
+    def __str__(self):
+        return f"Embedding {self.mood_check_id}"
+
+    def matches_note(self, note, model_name):
+        return (
+            self.text_sha256 == mood_note_fingerprint(note)
+            and self.model_name == model_name
+        )

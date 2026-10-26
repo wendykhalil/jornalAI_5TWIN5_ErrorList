@@ -1,7 +1,6 @@
 from collections import defaultdict
 from datetime import datetime, time, timedelta
 import json
-import os
 
 import requests
 from django.db.models import Avg, Count
@@ -11,14 +10,35 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from apps.journal.views import OLLAMA_URL
 
-from .models import MoodCheck
-from .serializers import MoodCheckSerializer
+from .ai import (
+    MoodAnalysisError,
+    MoodAnalysisTimeout,
+    MoodAnalysisUnavailable,
+    analyze_mood_note,
+    configured_mood_model,
+)
+from .assistant import (
+    MoodAssistantError,
+    MoodAssistantTimeout,
+    MoodAssistantUnavailable,
+    answer_mood_question,
+)
+from .embeddings import (
+    MoodEmbeddingError,
+    MoodEmbeddingTimeout,
+    MoodEmbeddingUnavailable,
+    search_user_notes,
+)
+from .models import MoodCheck, MoodNoteAnalysis, mood_note_fingerprint
+from .ocr import OcrRejected, OcrUnavailable, extract_upload
+from .serializers import MoodCheckSerializer, serialize_note_analysis
 
 SUMMARY_PERIODS = (7, 14, 30)
 
@@ -82,7 +102,7 @@ class MoodCheckViewSet(viewsets.ModelViewSet):
             end = timezone.make_aware(datetime.combine(end_date, time.max))
             queryset = queryset.filter(date__lte=end)
 
-        return queryset.order_by("-date", "-created_at")
+        return queryset.select_related("note_analysis").order_by("-date", "-created_at")
 
     def _filter_between(self, queryset, start_day, end_day):
         start = timezone.make_aware(datetime.combine(start_day, time.min))
@@ -191,6 +211,152 @@ class MoodCheckViewSet(viewsets.ModelViewSet):
             raise ValidationError({"days": "Choisissez 7, 14 ou 30."})
         return days
 
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="ocr",
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def ocr(self, request):
+        try:
+            result = extract_upload(request.FILES.get("file"))
+        except OcrRejected as exc:
+            raise ValidationError({"file": exc.message})
+        except OcrUnavailable as exc:
+            return Response({
+                "status": "unavailable",
+                "text": "",
+                "document_type": None,
+                "language": None,
+                "page_count": None,
+                "message": exc.message,
+            })
+        return Response(result)
+
+    @action(detail=False, methods=["post"], url_path="semantic-search")
+    def semantic_search(self, request):
+        query = request.data.get("query")
+        if not isinstance(query, str) or not query.strip():
+            raise ValidationError({"query": "Indiquez un texte à rechercher."})
+        query = query.strip()
+        if len(query) > 1000:
+            raise ValidationError({
+                "query": "La recherche ne peut pas dépasser 1000 caractères."
+            })
+        try:
+            payload = search_user_notes(
+                request.user,
+                query,
+                self._search_limit(request.data.get("limit", 5)),
+            )
+        except MoodEmbeddingTimeout as exc:
+            return Response({"detail": exc.message}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except MoodEmbeddingUnavailable as exc:
+            return Response({"detail": exc.message}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except MoodEmbeddingError as exc:
+            return Response({"detail": exc.message}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return Response(payload)
+
+    @action(detail=False, methods=["post"], url_path="assistant")
+    def assistant(self, request):
+        question = request.data.get("question")
+        if not isinstance(question, str) or not question.strip():
+            raise ValidationError({"question": "Indiquez une question."})
+        question = question.strip()
+        if len(question) > 1000:
+            raise ValidationError({
+                "question": "La question ne peut pas dépasser 1000 caractères."
+            })
+        try:
+            payload = answer_mood_question(request.user, question)
+        except MoodEmbeddingTimeout as exc:
+            return Response({"detail": exc.message}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except MoodEmbeddingUnavailable as exc:
+            return Response({"detail": exc.message}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except MoodEmbeddingError as exc:
+            return Response({"detail": exc.message}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except MoodAssistantTimeout as exc:
+            return Response({"detail": exc.message}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except MoodAssistantUnavailable as exc:
+            return Response({"detail": exc.message}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except MoodAssistantError as exc:
+            return Response({"detail": exc.message}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return Response(payload)
+
+    def _search_limit(self, raw):
+        if raw is None or raw == "":
+            raw = 5
+        if isinstance(raw, bool):
+            raise ValidationError({"limit": "La limite doit être un entier entre 1 et 10."})
+        if isinstance(raw, int):
+            limit = raw
+        elif isinstance(raw, str) and raw.strip().isdigit():
+            limit = int(raw.strip())
+        else:
+            raise ValidationError({"limit": "La limite doit être un entier entre 1 et 10."})
+        if limit < 1 or limit > 10:
+            raise ValidationError({"limit": "La limite doit être un entier entre 1 et 10."})
+        return limit
+
+    @action(detail=True, methods=["post"], url_path="analyze")
+    def analyze_note(self, request, pk=None):
+        check = self.get_object()
+        if not (check.note or "").strip():
+            raise ValidationError({
+                "note": "La note est vide. Aucune analyse ne peut être lancée."
+            })
+
+        existing = self._stored_analysis(check)
+        regenerate = request.data.get("regenerate") is True
+        if existing and existing.matches_note(check.note) and not regenerate:
+            return Response({
+                "analysis_status": "available",
+                "message": None,
+                "note_analysis": serialize_note_analysis(existing, check.note),
+            })
+
+        try:
+            reading = analyze_mood_note(check.note, check.mood)
+        except MoodAnalysisTimeout as exc:
+            return self._analysis_failure("unavailable", exc.message, check, existing)
+        except MoodAnalysisUnavailable as exc:
+            return self._analysis_failure("unavailable", exc.message, check, existing)
+        except MoodAnalysisError as exc:
+            return self._analysis_failure("error", exc.message, check, existing)
+
+        saved, _created = MoodNoteAnalysis.objects.update_or_create(
+            mood_check=check,
+            defaults={
+                "emotions_secondary": reading["emotions_secondary"],
+                "themes": reading["themes"],
+                "evidence": reading["evidence"],
+                "summary": reading["summary"],
+                "limitations": reading["limitations"],
+                "model_name": reading["model_name"],
+                "text_sha256": mood_note_fingerprint(check.note),
+                "analyzed_at": timezone.now(),
+            },
+        )
+        check.note_analysis = saved
+        return Response({
+            "analysis_status": "available",
+            "message": None,
+            "note_analysis": serialize_note_analysis(saved, check.note),
+        })
+
+    def _stored_analysis(self, check):
+        try:
+            return check.note_analysis
+        except MoodNoteAnalysis.DoesNotExist:
+            return None
+
+    def _analysis_failure(self, analysis_status, message, check, existing):
+        return Response({
+            "analysis_status": analysis_status,
+            "message": message,
+            "note_analysis": serialize_note_analysis(existing, check.note),
+        })
+
 
 def build_mood_statistics(queryset):
     count = queryset.count()
@@ -272,7 +438,7 @@ STATISTIQUES :
         response = requests.post(
             OLLAMA_URL,
             json={
-                "model": os.getenv("OLLAMA_MOOD_MODEL", "phi3:latest"),
+                "model": configured_mood_model(),
                 "prompt": prompt,
                 "stream": False,
                 "format": "json",

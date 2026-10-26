@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react"
 import AdminJournalPage from "./AdminJournalPage.jsx"
+import AdminMoodPage from "./AdminMoodPage.jsx"
 import { Link, Navigate, useNavigate, useParams } from "react-router"
 import {
   Users,
@@ -25,7 +26,6 @@ import {
   CheckCircle2,
   XCircle,
   Target,
-  HeartPulse,
   Tags,
   LockKeyhole,
   ArrowLeft,
@@ -1217,34 +1217,6 @@ const resourceConfigs = {
       ["reportStatus", "Report"],
     ],
   },
-  mood: {
-    title: "Mood Activity",
-    description:
-      "Anonymized, aggregate activity only. These charts do not provide medical or psychological conclusions.",
-    icon: HeartPulse,
-    stats: [
-      ["Total check-ins", 248],
-      ["This week", 42],
-      ["This month", 161],
-      ["Most selected", "Calm"],
-      ["Participation trend", "+11%"],
-    ],
-    chart: true,
-    rows: () =>
-      activityTrend.map((d, i) => ({
-        id: i + 1,
-        period: d.day,
-        checkIns: 22 + i * 3,
-        participation: `${46 + i * 4}%`,
-        intensity: (2.8 + i * 0.1).toFixed(1),
-      })),
-    columns: [
-      ["period", "Period"],
-      ["checkIns", "Check-ins"],
-      ["participation", "Participation"],
-      ["intensity", "Avg. intensity"],
-    ],
-  },
   multimedia: {
     title: "Multimedia",
     description:
@@ -1328,6 +1300,10 @@ export function ResourcePage({ type }) {
     return <AdminJournalPage />
   }
 
+  if (type === "mood") {
+    return <AdminMoodPage />
+  }
+
   return <OtherResourcePage type={type} />
 }
 
@@ -1379,7 +1355,7 @@ function OtherResourcePage({ type }) {
                 <YAxis axisLine={false} tickLine={false} />
                 <Tooltip />
                 <Bar
-                  dataKey={type === "mood" ? "memories" : "users"}
+                  dataKey="users"
                   fill="#6C63FF"
                   radius={[5, 5, 0, 0]}
                 />
