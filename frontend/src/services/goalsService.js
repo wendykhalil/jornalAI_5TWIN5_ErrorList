@@ -83,6 +83,12 @@ export const goalsService = {
   updateGoal: (id, data) =>
     request(`/goals/${id}/`, { method: "PATCH", body: body(data) }),
   deleteGoal: (id) => request(`/goals/${id}/`, { method: "DELETE" }),
+  breakdownGoal: (id) => request(`/goals/${id}/breakdown/`, { method: "POST", body: body({}) }),
+  createGoalSteps: (id, steps) =>
+    request(`/goals/${id}/steps/`, {
+      method: "POST",
+      body: body({ steps }),
+    }),
 
   // ---- Habits ----
   listHabits: () => fetchAll("/habits/"),

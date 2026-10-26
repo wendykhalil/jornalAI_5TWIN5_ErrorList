@@ -1,10 +1,29 @@
 from django.utils import timezone
 from rest_framework import serializers
 
-from .models import MoodCheck
+from .models import MoodCheck, MoodNoteAnalysis
+
+
+def serialize_note_analysis(analysis, note):
+    if analysis is None:
+        return None
+    current = analysis.matches_note(note)
+    return {
+        "status": "available" if current else "stale",
+        "emotions_secondary": analysis.emotions_secondary,
+        "themes": analysis.themes,
+        "evidence": analysis.evidence,
+        "summary": analysis.summary,
+        "limitations": analysis.limitations,
+        "model_name": analysis.model_name,
+        "analyzed_at": analysis.analyzed_at,
+        "current": current,
+    }
 
 
 class MoodCheckSerializer(serializers.ModelSerializer):
+    note_analysis = serializers.SerializerMethodField()
+
     class Meta:
         model = MoodCheck
         fields = [
@@ -15,8 +34,9 @@ class MoodCheckSerializer(serializers.ModelSerializer):
             "date",
             "created_at",
             "updated_at",
+            "note_analysis",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_at", "updated_at", "note_analysis"]
         extra_kwargs = {
             "date": {"required": False},
             "note": {"required": False, "allow_blank": True},
@@ -52,3 +72,10 @@ class MoodCheckSerializer(serializers.ModelSerializer):
                 "La date ne peut pas être dans le futur."
             )
         return value
+
+    def get_note_analysis(self, obj):
+        try:
+            analysis = obj.note_analysis
+        except MoodNoteAnalysis.DoesNotExist:
+            return None
+        return serialize_note_analysis(analysis, obj.note)

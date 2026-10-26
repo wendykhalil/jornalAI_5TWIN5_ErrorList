@@ -36,7 +36,15 @@ import {
 } from "../../components/ui"
 
 export default function Dashboard() {
-  const { memories, journals, media, goals, habits } = useStore()
+  const { memories, journals, media, goals, habits, user } = useStore()
+  const greetingName = user?.first_name?.trim() || user?.username?.trim() || ""
+  const todayLabel = new Date().toLocaleDateString("fr-FR", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  })
+  const eyebrow = todayLabel.charAt(0).toUpperCase() + todayLabel.slice(1)
   const [moodStats, setMoodStats] = useState(null)
   useEffect(() => {
     let active = true
@@ -80,8 +88,12 @@ export default function Dashboard() {
   return (
     <>
       <PageHeader
-        eyebrow="Mardi 18 février 2026"
-        title="Bonjour Aya, prête à écrire la suite ?"
+        eyebrow={eyebrow}
+        title={
+          greetingName
+            ? `Bonjour ${greetingName}, on écrit la suite ?`
+            : "Bonjour, on écrit la suite ?"
+        }
         subtitle="Voici un aperçu calme et utile de votre parcours personnel."
         actions={
           <Button onClick={() => location.assign("/journal/new")}>
