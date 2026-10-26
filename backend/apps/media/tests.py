@@ -1,7 +1,9 @@
+import base64
 import io
 import os
 import wave
 from unittest.mock import patch, MagicMock
+import requests
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -11,6 +13,18 @@ from rest_framework.test import APITestCase
 from rest_framework import status
 from apps.media.models import Media
 from apps.media.services import AudioTranscriptionService
+from apps.media.ai_services import (
+    PollinationsImageService,
+    InvalidPromptError,
+    InvalidSourceImageError,
+    AiProviderNotConfiguredError,
+    AiProviderTimeoutError,
+    AiProviderError,
+    AiProviderAuthError,
+    AiProviderPaymentRequiredError,
+    AiProviderRateLimitError,
+    AiProviderInvalidImageError,
+)
 from apps.journal.models import JournalEntry
 
 User = get_user_model()
@@ -909,3 +923,552 @@ class MediaPromptTranscriptionAPITest(APITestCase):
         self.assertEqual(len(temp_paths_created), 1)
         created_path = temp_paths_created[0]
         self.assertFalse(os.path.exists(created_path), "Temp file must be unlinked after request finishes")
+
+
+class MediaAiImageAPITest(APITestCase):
+    """
+    Test suite for Pollinations AI Image endpoints:
+    - POST /api/media/ai-generate/ (Text-to-Image ephemeral generation)
+    - POST /api/media/{id}/ai-edit/ (Image-to-Image instruction editing)
+    Verifies JWT auth, user ownership isolation, prompt validation, source image validation,
+    unconfigured provider safety (no network calls made, returns 503), timeout handling (504),
+    provider error handling (502), and zero database writes / original media integrity.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="ai_user",
+            email="ai@example.com",
+            password="testpass123",
+        )
+        self.other_user = User.objects.create_user(
+            username="ai_other_user",
+            email="ai_other@example.com",
+            password="testpass123",
+        )
+        self.client.force_authenticate(user=self.user)
+
+        self.image_media = Media.objects.create(
+            user=self.user,
+            title="Source Image",
+            media_type="image",
+            file=SimpleUploadedFile(
+                "source.jpg",
+                VALID_JPEG_BYTES + b"_extra_payload_padding",
+                content_type="image/jpeg",
+            ),
+        )
+        self.audio_media = Media.objects.create(
+            user=self.user,
+            title="Source Audio",
+            media_type="audio",
+            file=SimpleUploadedFile(
+                "source.mp3",
+                VALID_AUDIO_MP3_BYTES,
+                content_type="audio/mpeg",
+            ),
+        )
+        self.other_user_media = Media.objects.create(
+            user=self.other_user,
+            title="Other User Image",
+            media_type="image",
+            file=SimpleUploadedFile(
+                "other.jpg",
+                VALID_JPEG_BYTES,
+                content_type="image/jpeg",
+            ),
+        )
+
+    def tearDown(self):
+        for media in (self.image_media, self.audio_media, self.other_user_media):
+            if media.file and default_storage.exists(media.file.name):
+                default_storage.delete(media.file.name)
+
+    # --- Unit service tests ---
+
+    def test_service_validate_prompt_rules(self):
+        """Test prompt validation rules (non-empty, <= 1000 chars)"""
+        with self.assertRaises(InvalidPromptError):
+            PollinationsImageService.validate_prompt("")
+        with self.assertRaises(InvalidPromptError):
+            PollinationsImageService.validate_prompt("   ")
+        with self.assertRaises(InvalidPromptError):
+            PollinationsImageService.validate_prompt(None)
+        with self.assertRaises(InvalidPromptError):
+            PollinationsImageService.validate_prompt("A" * 1001)
+
+        cleaned = PollinationsImageService.validate_prompt("  A scenic mountain  ")
+        self.assertEqual(cleaned, "A scenic mountain")
+
+    def test_service_is_configured_reflects_env(self):
+        """Test that is_configured accurately reflects POLLINATIONS_API_KEY"""
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": ""}):
+            self.assertFalse(PollinationsImageService.is_configured())
+
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": "test_api_key_123"}):
+            self.assertTrue(PollinationsImageService.is_configured())
+
+    # --- Text-to-Image (ai-generate) tests ---
+
+    def test_ai_generate_unauthenticated_rejected(self):
+        """Test that unauthenticated requests to /api/media/ai-generate/ return HTTP 401"""
+        self.client.force_authenticate(user=None)
+        response = self.client.post("/api/media/ai-generate/", {"prompt": "Sunset"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_ai_generate_empty_prompt_rejected(self):
+        """Test that missing or whitespace prompt returns HTTP 400 with code invalid_prompt"""
+        response = self.client.post("/api/media/ai-generate/", {"prompt": ""}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "invalid_prompt")
+
+        response2 = self.client.post("/api/media/ai-generate/", {"prompt": "   "}, format="json")
+        self.assertEqual(response2.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response2.data["code"], "invalid_prompt")
+
+        response3 = self.client.post("/api/media/ai-generate/", {}, format="json")
+        self.assertEqual(response3.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response3.data["code"], "invalid_prompt")
+
+    def test_ai_generate_oversized_prompt_rejected(self):
+        """Test that prompt exceeding 1000 characters returns HTTP 400 with code invalid_prompt"""
+        response = self.client.post("/api/media/ai-generate/", {"prompt": "X" * 1001}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "invalid_prompt")
+        self.assertIn("1000", response.data["error"])
+
+    @patch("requests.get")
+    def test_ai_generate_provider_not_configured_returns_503(self, mock_get):
+        """
+        Test that when POLLINATIONS_API_KEY is not configured:
+        - HTTP 503 is returned with code provider_not_configured
+        - ZERO external HTTP requests are made
+        """
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": ""}):
+            response = self.client.post("/api/media/ai-generate/", {"prompt": "A futuristic city"}, format="json")
+            self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+            self.assertEqual(response.data["code"], "provider_not_configured")
+            mock_get.assert_not_called()
+
+    @patch("requests.get")
+    def test_ai_generate_success_mocked(self, mock_get):
+        """
+        Test successful T2I generation returning base64 data URL without writing to database.
+        """
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "image/jpeg"}
+        mock_response.content = VALID_JPEG_BYTES + b"_generated_image_content"
+        mock_get.return_value = mock_response
+
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": "fake_secret_key"}):
+            response = self.client.post(
+                "/api/media/ai-generate/",
+                {
+                    "prompt": "A calm lake at sunrise",
+                    "style": "watercolor",
+                    "aspect_ratio": "16:9",
+                    "seed": 42,
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("image", response.data)
+        self.assertTrue(response.data["image"].startswith("data:image/jpeg;base64,"))
+        self.assertEqual(response.data["width"], 1280)
+        self.assertEqual(response.data["height"], 720)
+        self.assertIn("watercolor", response.data["prompt"])
+        mock_get.assert_called_once()
+
+        # Verify Authorization header sent
+        _, kwargs = mock_get.call_args
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer fake_secret_key")
+
+    @patch("requests.get")
+    def test_ai_generate_timeout_returns_504(self, mock_get):
+        """Test that provider timeout returns HTTP 504 with code provider_timeout"""
+        mock_get.side_effect = requests.exceptions.Timeout("Connection timed out")
+
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": "fake_secret_key"}):
+            response = self.client.post("/api/media/ai-generate/", {"prompt": "A forest path"}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_504_GATEWAY_TIMEOUT)
+        self.assertEqual(response.data["code"], "provider_timeout")
+
+    @patch("requests.get")
+    def test_ai_generate_provider_http_error_returns_502(self, mock_get):
+        """Test that provider 500 error returns HTTP 502 with code provider_error"""
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.text = "Internal Provider Server Error"
+        mock_get.return_value = mock_response
+
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": "fake_secret_key"}):
+            response = self.client.post("/api/media/ai-generate/", {"prompt": "A forest path"}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertEqual(response.data["code"], "provider_error")
+
+    @patch("requests.get")
+    def test_ai_generate_provider_auth_error_returns_502(self, mock_get):
+        """Test that provider 401 returns HTTP 502 with code provider_auth_error"""
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.text = "Unauthorized"
+        mock_get.return_value = mock_response
+
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": "invalid_key"}):
+            response = self.client.post("/api/media/ai-generate/", {"prompt": "A forest path"}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertEqual(response.data["code"], "provider_auth_error")
+        self.assertIn("authentification", response.data["error"])
+
+    @patch("requests.get")
+    def test_ai_generate_provider_insufficient_credits_returns_502(self, mock_get):
+        """Test that provider 402 returns HTTP 502 with code provider_insufficient_credits"""
+        mock_response = MagicMock()
+        mock_response.status_code = 402
+        mock_response.text = "Insufficient credits"
+        mock_get.return_value = mock_response
+
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": "fake_secret_key"}):
+            response = self.client.post("/api/media/ai-generate/", {"prompt": "A forest path"}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertEqual(response.data["code"], "provider_insufficient_credits")
+        self.assertIn("Crédits insuffisants", response.data["error"])
+
+    @patch("requests.get")
+    def test_ai_generate_provider_rate_limit_returns_429(self, mock_get):
+        """Test that provider 429 returns HTTP 429 with code provider_rate_limited"""
+        mock_response = MagicMock()
+        mock_response.status_code = 429
+        mock_response.text = "Rate limit exceeded"
+        mock_get.return_value = mock_response
+
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": "fake_secret_key"}):
+            response = self.client.post("/api/media/ai-generate/", {"prompt": "A forest path"}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertEqual(response.data["code"], "provider_rate_limited")
+
+    @patch("requests.get")
+    def test_ai_generate_non_image_payload_rejected(self, mock_get):
+        """Test that non-image payload from provider returns HTTP 502 with provider_invalid_image"""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "image/jpeg"}
+        mock_response.content = b"<html>This is an HTML error page, not an image</html>"
+        mock_get.return_value = mock_response
+
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": "fake_secret_key"}):
+            response = self.client.post("/api/media/ai-generate/", {"prompt": "A sunset"}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertEqual(response.data["code"], "provider_invalid_image")
+
+    @patch("requests.get")
+    def test_ai_generate_does_not_create_media_in_db(self, mock_get):
+        """Test that ai-generate NEVER creates any Media record in the database"""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "image/jpeg"}
+        mock_response.content = VALID_JPEG_BYTES + b"_content_payload"
+        mock_get.return_value = mock_response
+
+        initial_count = Media.objects.count()
+
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": "fake_secret_key"}):
+            response = self.client.post("/api/media/ai-generate/", {"prompt": "A galaxy"}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(Media.objects.count(), initial_count)
+
+    # --- Image-to-Image (ai-edit) tests ---
+
+    def test_ai_edit_unauthenticated_rejected(self):
+        """Test that unauthenticated requests to /api/media/{id}/ai-edit/ return HTTP 401"""
+        self.client.force_authenticate(user=None)
+        response = self.client.post(
+            f"/api/media/{self.image_media.id}/ai-edit/",
+            {"prompt": "Add sunglasses"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_ai_edit_other_user_media_returns_404(self):
+        """Test user isolation: attempting to edit another user's image returns HTTP 404"""
+        response = self.client.post(
+            f"/api/media/{self.other_user_media.id}/ai-edit/",
+            {"prompt": "Add sunglasses"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_ai_edit_non_image_media_rejected(self):
+        """Test that attempting to edit a non-image media (e.g. audio) returns HTTP 400 invalid_source_image"""
+        response = self.client.post(
+            f"/api/media/{self.audio_media.id}/ai-edit/",
+            {"prompt": "Make it brighter"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "invalid_source_image")
+
+    def test_ai_edit_empty_prompt_rejected(self):
+        """Test that empty prompt in ai-edit returns HTTP 400 invalid_prompt"""
+        response = self.client.post(
+            f"/api/media/{self.image_media.id}/ai-edit/",
+            {"prompt": ""},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "invalid_prompt")
+
+    def test_ai_edit_oversized_prompt_rejected(self):
+        """Test that prompt exceeding 1000 characters in ai-edit returns HTTP 400 invalid_prompt"""
+        response = self.client.post(
+            f"/api/media/{self.image_media.id}/ai-edit/",
+            {"prompt": "Z" * 1001},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "invalid_prompt")
+
+    @patch("requests.post")
+    def test_ai_edit_provider_not_configured_returns_503(self, mock_post):
+        """
+        Test that when POLLINATIONS_API_KEY is not configured:
+        - HTTP 503 is returned with code provider_not_configured
+        - ZERO external HTTP requests are made
+        """
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": ""}):
+            response = self.client.post(
+                f"/api/media/{self.image_media.id}/ai-edit/",
+                {"prompt": "Turn background into a beach"},
+                format="json",
+            )
+            self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+            self.assertEqual(response.data["code"], "provider_not_configured")
+            mock_post.assert_not_called()
+
+    @patch("requests.post")
+    def test_ai_edit_success_mocked_binary(self, mock_post):
+        """
+        Test successful image edit with binary image response from provider.
+        """
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "image/jpeg"}
+        mock_response.content = VALID_JPEG_BYTES + b"_edited_binary_image_content"
+        mock_post.return_value = mock_response
+
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": "fake_secret_key"}):
+            response = self.client.post(
+                f"/api/media/{self.image_media.id}/ai-edit/",
+                {"prompt": "Add gentle snow falling", "seed": 99},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("image", response.data)
+        self.assertTrue(response.data["image"].startswith("data:image/jpeg;base64,"))
+        self.assertEqual(response.data["source_media_id"], str(self.image_media.id))
+        self.assertEqual(response.data["prompt"], "Add gentle snow falling")
+        mock_post.assert_called_once()
+
+    @patch("requests.post")
+    def test_ai_edit_success_mocked_json_b64(self, mock_post):
+        """
+        Test successful image edit with OpenAI-style JSON {data: [{b64_json: ...}]} response.
+        """
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "application/json"}
+        b64_val = base64.b64encode(VALID_JPEG_BYTES + b"_json_edited_bytes").decode("ascii")
+        mock_response.json.return_value = {"data": [{"b64_json": b64_val}]}
+        mock_post.return_value = mock_response
+
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": "fake_secret_key"}):
+            response = self.client.post(
+                f"/api/media/{self.image_media.id}/ai-edit/",
+                {"prompt": "Make it in oil painting style"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["image"], f"data:image/jpeg;base64,{b64_val}")
+
+    @patch("requests.get")
+    @patch("requests.post")
+    def test_ai_edit_no_secondary_fallback_on_post_failure(self, mock_post, mock_get):
+        """
+        Security and cost test:
+        Verifies that when POST /v1/images/edits returns an error (404/500),
+        no secondary GET fallback or alternate endpoint is EVER executed.
+        """
+        mock_post_response = MagicMock()
+        mock_post_response.status_code = 404
+        mock_post_response.text = "Not found"
+        mock_post.return_value = mock_post_response
+
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": "fake_secret_key"}):
+            response = self.client.post(
+                f"/api/media/{self.image_media.id}/ai-edit/",
+                {"prompt": "Transform into a sketch"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertEqual(response.data["code"], "provider_error")
+        mock_post.assert_called_once()
+        mock_get.assert_not_called()
+
+    @patch("requests.post")
+    def test_ai_edit_provider_auth_error_returns_502(self, mock_post):
+        """Test that provider 401 returns HTTP 502 with code provider_auth_error"""
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.text = "Unauthorized"
+        mock_post.return_value = mock_response
+
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": "invalid_key"}):
+            response = self.client.post(
+                f"/api/media/{self.image_media.id}/ai-edit/",
+                {"prompt": "Add autumn leaves"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertEqual(response.data["code"], "provider_auth_error")
+
+    @patch("requests.post")
+    def test_ai_edit_provider_insufficient_credits_returns_502(self, mock_post):
+        """Test that provider 402 returns HTTP 502 with code provider_insufficient_credits"""
+        mock_response = MagicMock()
+        mock_response.status_code = 402
+        mock_response.text = "Payment Required"
+        mock_post.return_value = mock_response
+
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": "fake_secret_key"}):
+            response = self.client.post(
+                f"/api/media/{self.image_media.id}/ai-edit/",
+                {"prompt": "Add autumn leaves"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertEqual(response.data["code"], "provider_insufficient_credits")
+
+    @patch("requests.post")
+    def test_ai_edit_provider_rate_limit_returns_429(self, mock_post):
+        """Test that provider 429 returns HTTP 429 with code provider_rate_limited"""
+        mock_response = MagicMock()
+        mock_response.status_code = 429
+        mock_response.text = "Too Many Requests"
+        mock_post.return_value = mock_response
+
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": "fake_secret_key"}):
+            response = self.client.post(
+                f"/api/media/{self.image_media.id}/ai-edit/",
+                {"prompt": "Add autumn leaves"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertEqual(response.data["code"], "provider_rate_limited")
+
+    @patch("requests.post")
+    def test_ai_edit_non_image_payload_rejected(self, mock_post):
+        """Test that non-image payload from provider returns HTTP 502 with provider_invalid_image"""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "image/jpeg"}
+        mock_response.content = b"Corrupted non-image payload bytes"
+        mock_post.return_value = mock_response
+
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": "fake_secret_key"}):
+            response = self.client.post(
+                f"/api/media/{self.image_media.id}/ai-edit/",
+                {"prompt": "Add autumn leaves"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertEqual(response.data["code"], "provider_invalid_image")
+
+    @patch("requests.post")
+    def test_ai_edit_timeout_returns_504(self, mock_post):
+        """Test that provider timeout during edit returns HTTP 504 provider_timeout"""
+        mock_post.side_effect = requests.exceptions.Timeout("Read timeout")
+
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": "fake_secret_key"}):
+            response = self.client.post(
+                f"/api/media/{self.image_media.id}/ai-edit/",
+                {"prompt": "Add autumn leaves"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_504_GATEWAY_TIMEOUT)
+        self.assertEqual(response.data["code"], "provider_timeout")
+
+    @patch("requests.post")
+    def test_ai_edit_provider_error_returns_502(self, mock_post):
+        """Test that provider 500 during edit returns HTTP 502 provider_error"""
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.text = "Inference engine failed"
+        mock_post.return_value = mock_response
+
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": "fake_secret_key"}):
+            response = self.client.post(
+                f"/api/media/{self.image_media.id}/ai-edit/",
+                {"prompt": "Add autumn leaves"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertEqual(response.data["code"], "provider_error")
+
+    @patch("requests.post")
+    def test_ai_edit_does_not_modify_original_media(self, mock_post):
+        """
+        Critical security test:
+        Verifies that editing an image never modifies, overwrites, or deletes
+        the original Media database row or stored file.
+        """
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "image/jpeg"}
+        mock_response.content = VALID_JPEG_BYTES + b"_edited_binary_image_content"
+        mock_post.return_value = mock_response
+
+        orig_id = self.image_media.id
+        orig_title = self.image_media.title
+        orig_file_name = self.image_media.file.name
+        self.image_media.file.open("rb")
+        orig_file_bytes = self.image_media.file.read()
+        self.image_media.file.close()
+
+        with patch.dict(os.environ, {"POLLINATIONS_API_KEY": "fake_secret_key"}):
+            response = self.client.post(
+                f"/api/media/{self.image_media.id}/ai-edit/",
+                {"prompt": "Add glowing neon outlines"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        # Reload from database
+        self.image_media.refresh_from_db()
+        self.assertEqual(self.image_media.id, orig_id)
+        self.assertEqual(self.image_media.title, orig_title)
+        self.assertEqual(self.image_media.file.name, orig_file_name)
+
+        # Verify physical file content is unchanged
+        self.image_media.file.open("rb")
+        current_file_bytes = self.image_media.file.read()
+        self.image_media.file.close()
+        self.assertEqual(current_file_bytes, orig_file_bytes)

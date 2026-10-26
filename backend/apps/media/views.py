@@ -20,6 +20,19 @@ from .services import (
     AudioDurationExceededError,
     NoSpeechDetectedError,
 )
+from .ai_services import (
+    PollinationsImageService,
+    AiImageError,
+    AiProviderNotConfiguredError,
+    InvalidPromptError,
+    InvalidSourceImageError,
+    AiProviderTimeoutError,
+    AiProviderError,
+    AiProviderAuthError,
+    AiProviderPaymentRequiredError,
+    AiProviderRateLimitError,
+    AiProviderInvalidImageError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -233,4 +246,145 @@ class MediaViewSet(viewsets.ModelViewSet):
                     "code": "transcription_error",
                 },
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+    @action(detail=False, methods=["post"], url_path="ai-generate")
+    def ai_generate(self, request):
+        """
+        Generate an image from a prompt using Pollinations AI.
+        POST /api/media/ai-generate/
+        Body: { "prompt": str, "style": str (opt), "aspect_ratio": "1:1"|"16:9"|"4:5" (opt), "seed": int (opt) }
+        Protected by JWT authentication.
+        Does NOT persist any Media record in the database.
+        """
+        prompt = request.data.get("prompt")
+        style = request.data.get("style")
+        aspect_ratio = request.data.get("aspect_ratio", "1:1")
+        seed = request.data.get("seed")
+
+        try:
+            result = PollinationsImageService.generate_image(
+                prompt=prompt,
+                style=style,
+                aspect_ratio=aspect_ratio,
+                seed=seed,
+            )
+            return Response(result, status=status.HTTP_200_OK)
+        except InvalidPromptError as exc:
+            return Response(
+                {"error": str(exc), "code": "invalid_prompt"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except AiProviderNotConfiguredError as exc:
+            return Response(
+                {"error": str(exc), "code": "provider_not_configured"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except AiProviderRateLimitError as exc:
+            return Response(
+                {"error": str(exc), "code": "provider_rate_limited"},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        except AiProviderAuthError as exc:
+            return Response(
+                {"error": str(exc), "code": "provider_auth_error"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        except AiProviderPaymentRequiredError as exc:
+            return Response(
+                {"error": str(exc), "code": "provider_insufficient_credits"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        except AiProviderInvalidImageError as exc:
+            return Response(
+                {"error": str(exc), "code": "provider_invalid_image"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        except AiProviderTimeoutError as exc:
+            return Response(
+                {"error": str(exc), "code": "provider_timeout"},
+                status=status.HTTP_504_GATEWAY_TIMEOUT,
+            )
+        except AiProviderError as exc:
+            return Response(
+                {"error": str(exc), "code": "provider_error"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        except Exception as exc:
+            logger.error("Unexpected error during ai_generate: %s", exc)
+            return Response(
+                {"error": "Erreur inattendue lors de la génération d'image.", "code": "generation_error"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    @action(detail=True, methods=["post"], url_path="ai-edit")
+    def ai_edit(self, request, pk=None):
+        """
+        Edit an existing image Media instance using an instruction prompt.
+        POST /api/media/{id}/ai-edit/
+        Body: { "prompt": str, "seed": int (opt) }
+        Protected by JWT authentication and user ownership isolation (self.get_object()).
+        Does NOT overwrite or modify the original Media instance.
+        """
+        media = self.get_object()
+        prompt = request.data.get("prompt")
+        seed = request.data.get("seed")
+
+        try:
+            result = PollinationsImageService.edit_image(
+                media_instance=media,
+                prompt=prompt,
+                seed=seed,
+            )
+            return Response(result, status=status.HTTP_200_OK)
+        except InvalidPromptError as exc:
+            return Response(
+                {"error": str(exc), "code": "invalid_prompt"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except InvalidSourceImageError as exc:
+            return Response(
+                {"error": str(exc), "code": "invalid_source_image"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except AiProviderNotConfiguredError as exc:
+            return Response(
+                {"error": str(exc), "code": "provider_not_configured"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except AiProviderRateLimitError as exc:
+            return Response(
+                {"error": str(exc), "code": "provider_rate_limited"},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        except AiProviderAuthError as exc:
+            return Response(
+                {"error": str(exc), "code": "provider_auth_error"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        except AiProviderPaymentRequiredError as exc:
+            return Response(
+                {"error": str(exc), "code": "provider_insufficient_credits"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        except AiProviderInvalidImageError as exc:
+            return Response(
+                {"error": str(exc), "code": "provider_invalid_image"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        except AiProviderTimeoutError as exc:
+            return Response(
+                {"error": str(exc), "code": "provider_timeout"},
+                status=status.HTTP_504_GATEWAY_TIMEOUT,
+            )
+        except AiProviderError as exc:
+            return Response(
+                {"error": str(exc), "code": "provider_error"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        except Exception as exc:
+            logger.error("Unexpected error during ai_edit on media %s: %s", media.id, exc)
+            return Response(
+                {"error": "Erreur inattendue lors de l'édition d'image.", "code": "edit_error"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
