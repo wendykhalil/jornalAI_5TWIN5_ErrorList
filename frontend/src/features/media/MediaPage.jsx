@@ -106,6 +106,9 @@ export function MediaPage({ mode = "library" }) {
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState(null)
 
+  // Téléchargement sécurisé du média
+  const [isDownloadingMedia, setIsDownloadingMedia] = useState(false)
+
   // --- States pour la transcription audio (Mode 4) ---
   const [selectedAudioId, setSelectedAudioId] = useState("")
   const [transcriptionText, setTranscriptionText] = useState("")
@@ -800,6 +803,32 @@ export function MediaPage({ mode = "library" }) {
     }
   }
 
+  // Téléchargement réel et forcé du média sur disque
+  const handleDownloadCurrentMedia = async () => {
+    if (!currentMedia?.url || isDownloadingMedia) return
+    try {
+      setIsDownloadingMedia(true)
+      const fileName =
+        currentMedia.title ||
+        currentMedia.file?.split("/").pop() ||
+        `media_${currentMedia.id}`
+      await mediaService.downloadMedia(
+        currentMedia.url,
+        fileName,
+        currentMedia.media_type,
+      )
+      notify("Téléchargement lancé avec succès !")
+    } catch (err) {
+      console.error("Erreur téléchargement média:", err)
+      notify(
+        err?.message || "Impossible de télécharger le fichier média.",
+        "error",
+      )
+    } finally {
+      setIsDownloadingMedia(false)
+    }
+  }
+
   // Fonctions d'édition des métadonnées
   const handleOpenEdit = () => {
     if (!currentMedia) return
@@ -1415,10 +1444,18 @@ export function MediaPage({ mode = "library" }) {
                       <Button
                         variant="secondary"
                         onClick={() => {
-                          const link = document.createElement("a")
-                          link.href = generatedResult.image
-                          link.download = `creation_ia_${Date.now()}.jpg`
-                          link.click()
+                          mediaService
+                            .downloadMedia(
+                              generatedResult.image,
+                              `creation_ia_${Date.now()}.jpg`,
+                              "image",
+                            )
+                            .catch((err) => {
+                              notify(
+                                err?.message || "Erreur lors du téléchargement",
+                                "error",
+                              )
+                            })
                         }}
                       >
                         <Download size={16} /> Télécharger
@@ -1833,10 +1870,19 @@ export function MediaPage({ mode = "library" }) {
                               <Button
                                 variant="secondary"
                                 onClick={() => {
-                                  const link = document.createElement("a")
-                                  link.href = editedResult.image
-                                  link.download = `edit_ia_${Date.now()}.jpg`
-                                  link.click()
+                                  mediaService
+                                    .downloadMedia(
+                                      editedResult.image,
+                                      `edit_ia_${Date.now()}.jpg`,
+                                      "image",
+                                    )
+                                    .catch((err) => {
+                                      notify(
+                                        err?.message ||
+                                          "Erreur lors du téléchargement",
+                                        "error",
+                                      )
+                                    })
                                 }}
                               >
                                 <Download size={16} /> Télécharger
@@ -2459,12 +2505,19 @@ export function MediaPage({ mode = "library" }) {
               {currentMedia.url && (
                 <Button
                   variant="secondary"
-                  onClick={() =>
-                    window.open(currentMedia.url, "_blank", "noopener")
-                  }
+                  onClick={handleDownloadCurrentMedia}
+                  disabled={isDownloadingMedia}
                   aria-label="Télécharger le fichier"
                 >
-                  <Download size={16} /> Télécharger
+                  {isDownloadingMedia ? (
+                    <LoaderCircle
+                      size={16}
+                      className="animate-spin text-primary-500"
+                    />
+                  ) : (
+                    <Download size={16} />
+                  )}
+                  {isDownloadingMedia ? "Téléchargement..." : "Télécharger"}
                 </Button>
               )}
 

@@ -232,6 +232,263 @@ export const mediaService = {
     const file = dataUrlToFile(dataUrl, `ai_${Date.now()}.jpg`)
     return mediaService.uploadMedia(file, safeTitle, "image", description || "")
   },
+
+  /**
+   * Resolve media file URL (relative or absolute)
+   */
+  resolveFileUrl,
+
+  /**
+   * Download a media file to user's disk
+   */
+  downloadMedia: downloadMediaFile,
+}
+
+const MIME_TO_EXTENSION = {
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+  "audio/mpeg": "mp3",
+  "audio/mp3": "mp3",
+  "audio/wav": "wav",
+  "audio/x-wav": "wav",
+  "audio/ogg": "ogg",
+  "audio/webm": "webm",
+  "audio/x-m4a": "m4a",
+  "audio/m4a": "m4a",
+  "audio/aac": "m4a",
+  "video/mp4": "mp4",
+  "video/webm": "webm",
+  "video/quicktime": "mov",
+  "application/pdf": "pdf",
+}
+
+const MEDIA_TYPE_DEFAULT_EXTENSIONS = {
+  image: "jpg",
+  audio: "mp3",
+  video: "mp4",
+  document: "pdf",
+}
+
+/**
+ * Nettoie une chaîne pour en faire un nom de fichier sûr (sans caractères interdits ni injection de chemin).
+ */
+export function sanitizeFilename(name) {
+  if (!name || typeof name !== "string") return "media"
+  return (
+    name
+      .trim()
+      .replace(/[\\/]/g, "_")
+      .replace(/[:*?"<>|%]/g, "")
+      .replace(/\s+/g, "_")
+      .slice(0, 100) || "media"
+  )
+}
+
+/**
+ * Extrait l'extension valide depuis un chemin ou une URL.
+ */
+export function extractExtensionFromPath(pathOrUrl) {
+  if (!pathOrUrl || typeof pathOrUrl !== "string") return ""
+  const clean = pathOrUrl.split("?")[0].split("#")[0]
+  const lastSlash = Math.max(clean.lastIndexOf("/"), clean.lastIndexOf("\\"))
+  const filename = lastSlash >= 0 ? clean.substring(lastSlash + 1) : clean
+  const lastDot = filename.lastIndexOf(".")
+  if (lastDot > 0 && lastDot < filename.length - 1) {
+    const ext = filename.substring(lastDot + 1).toLowerCase()
+    if (/^[a-z0-9]{2,5}$/.test(ext)) {
+      return ext === "jpeg" ? "jpg" : ext
+    }
+  }
+  return ""
+}
+
+/**
+ * Résout une URL de fichier multimédia (relative, absolue ou data URL).
+ */
+export function resolveFileUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return ""
+  if (
+    rawUrl.startsWith("http://") ||
+    rawUrl.startsWith("https://") ||
+    rawUrl.startsWith("data:") ||
+    rawUrl.startsWith("blob:")
+  ) {
+    return rawUrl
+  }
+  const cleanBase = API_BASE_URL.replace(/\/api\/?$/, "")
+  return `${cleanBase}${rawUrl.startsWith("/") ? "" : "/"}${rawUrl}`
+}
+
+/**
+ * Télécharge un fichier multimédia de façon réelle et forcée sur le disque de l'utilisateur.
+ * Déclenche un flux binaire (Blob) avec conversion en URL d'objet de même origine,
+ * évitant l'ouverture d'un nouvel onglet et contournant la restriction Same-Origin Policy sur l'attribut download.
+ *
+ * @param {string|Object} urlOrMedia - URL cible ou objet Media ({ url, title, media_type, file })
+ * @param {string} [preferredName=""] - Nom préféré pour le fichier téléchargé
+ * @param {string} [mediaType=""] - Type de média optionnel ("image", "audio", "video", "document")
+ * @returns {Promise<{ success: boolean, filename: string, size?: number }>}
+ */
+export async function downloadMediaFile(
+  urlOrMedia,
+  preferredName = "",
+  mediaType = "",
+) {
+  let targetUrl = ""
+  let targetName = preferredName
+  let targetType = mediaType
+
+  if (urlOrMedia && typeof urlOrMedia === "object") {
+    targetUrl = urlOrMedia.url || urlOrMedia.file || ""
+    targetName = preferredName || urlOrMedia.title || urlOrMedia.file || ""
+    targetType = mediaType || urlOrMedia.media_type || ""
+  } else if (typeof urlOrMedia === "string") {
+    targetUrl = urlOrMedia.trim()
+  }
+
+  if (!targetUrl) {
+    throw new Error("URL de fichier invalide ou absente.")
+  }
+
+  const resolvedUrl = resolveFileUrl(targetUrl)
+
+  // 1. Cas des data URLs (ex : images d'aperçu IA générées en direct)
+  if (resolvedUrl.startsWith("data:")) {
+    const mimeMatch = resolvedUrl.match(/^data:([^;]+);/)
+    const dataMime = mimeMatch ? mimeMatch[1].toLowerCase() : ""
+    let ext =
+      MIME_TO_EXTENSION[dataMime] ||
+      extractExtensionFromPath(targetName) ||
+      "jpg"
+    let cleanBaseName = sanitizeFilename(targetName || `image_ia_${Date.now()}`)
+    if (cleanBaseName.toLowerCase().endsWith(`.${ext}`)) {
+      cleanBaseName = cleanBaseName.slice(0, -(ext.length + 1))
+    }
+    const finalFilename = `${cleanBaseName}.${ext}`
+
+    const link = document.createElement("a")
+    link.href = resolvedUrl
+    link.download = finalFilename
+    link.style.display = "none"
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    return { success: true, filename: finalFilename }
+  }
+
+  // 2. Cas des blob: URLs
+  if (resolvedUrl.startsWith("blob:")) {
+    let ext =
+      extractExtensionFromPath(targetName) ||
+      MEDIA_TYPE_DEFAULT_EXTENSIONS[targetType] ||
+      "bin"
+    let cleanBaseName = sanitizeFilename(targetName || `fichier_${Date.now()}`)
+    if (cleanBaseName.toLowerCase().endsWith(`.${ext}`)) {
+      cleanBaseName = cleanBaseName.slice(0, -(ext.length + 1))
+    }
+    const finalFilename = `${cleanBaseName}.${ext}`
+
+    const link = document.createElement("a")
+    link.href = resolvedUrl
+    link.download = finalFilename
+    link.style.display = "none"
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    return { success: true, filename: finalFilename }
+  }
+
+  // 3. Téléchargement réseau HTTP / HTTPS
+  const { accessToken } = authService.getTokens()
+  let response
+
+  try {
+    const headers = accessToken
+      ? { Authorization: `Bearer ${accessToken}` }
+      : {}
+    response = await fetch(resolvedUrl, { headers })
+    // Si le serveur de fichiers statiques rejette le header Authorization (CORS 401/403), retenter sans header
+    if (
+      !response.ok &&
+      accessToken &&
+      (response.status === 401 || response.status === 403)
+    ) {
+      response = await fetch(resolvedUrl)
+    }
+  } catch (netErr) {
+    try {
+      response = await fetch(resolvedUrl)
+    } catch {
+      throw new Error(
+        `Impossible de contacter le serveur pour télécharger le fichier (${netErr.message || "erreur réseau"}).`,
+      )
+    }
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `Échec du téléchargement du fichier (HTTP ${response.status} ${response.statusText || ""}).`.trim(),
+    )
+  }
+
+  const contentType = (response.headers.get("content-type") || "").toLowerCase()
+  if (contentType.includes("text/html")) {
+    throw new Error(
+      "Le serveur a retourné une page HTML au lieu du fichier binaire attendu.",
+    )
+  }
+
+  const blob = await response.blob()
+  if (!blob || blob.size === 0) {
+    throw new Error("Le fichier téléchargé est vide (0 octet).")
+  }
+
+  // Détection de l'extension appropriée
+  let ext = extractExtensionFromPath(resolvedUrl)
+  if (!ext) {
+    const cleanMime = contentType.split(";")[0].trim()
+    ext = MIME_TO_EXTENSION[cleanMime]
+  }
+  if (!ext) {
+    ext = extractExtensionFromPath(targetName)
+  }
+  if (!ext && targetType) {
+    ext = MEDIA_TYPE_DEFAULT_EXTENSIONS[targetType]
+  }
+  if (!ext) {
+    ext = "bin"
+  }
+
+  // Formatage du nom de fichier final
+  let cleanBaseName = sanitizeFilename(targetName || `media_${Date.now()}`)
+  if (cleanBaseName.toLowerCase().endsWith(`.${ext}`)) {
+    cleanBaseName = cleanBaseName.slice(0, -(ext.length + 1))
+  }
+  const finalFilename = `${cleanBaseName}.${ext}`
+
+  // Création d'un lien local de même origine via Blob URL
+  const blobUrl = window.URL.createObjectURL(blob)
+  const link = document.createElement("a")
+  link.href = blobUrl
+  link.download = finalFilename
+  link.style.display = "none"
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+
+  // Révocation de l'URL Blob après téléchargement pour libérer la mémoire du navigateur
+  setTimeout(() => {
+    try {
+      window.URL.revokeObjectURL(blobUrl)
+    } catch {
+      // Ignorer si déjà révoquée
+    }
+  }, 2000)
+
+  return { success: true, filename: finalFilename, size: blob.size }
 }
 
 /**
