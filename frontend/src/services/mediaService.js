@@ -146,6 +146,119 @@ export const mediaService = {
       method: "POST",
     })
   },
+
+  /**
+   * Transcribe an ephemeral voice prompt using Whisper
+   * Calls POST /api/media/transcribe-prompt/
+   * @param {Blob|File} audioFile - max 30s audio
+   * @returns {Promise<{text: string, language: string, duration: number}>}
+   */
+  transcribeVoicePrompt: (audioFile) => {
+    const formData = new FormData()
+    formData.append(
+      "audio",
+      audioFile,
+      audioFile.name || `voice_prompt_${Date.now()}.webm`,
+    )
+    return mediaRequest("transcribe-prompt/", {
+      method: "POST",
+      body: formData,
+    })
+  },
+
+  /**
+   * Generate an image from prompt using Pollinations AI via Django backend
+   * Calls POST /api/media/ai-generate/
+   * @param {Object} params - { prompt, style, aspect_ratio, seed }
+   * @returns {Promise<{image: string, prompt: string, model: string, content_type: string, width: number, height: number}>}
+   */
+  generateAiImage: ({ prompt, style, aspect_ratio = "1:1", seed }) => {
+    const payload = {
+      prompt: prompt?.trim(),
+      aspect_ratio,
+    }
+    if (style && style !== "none" && style !== "Aucun") {
+      payload.style = style
+    }
+    if (seed !== undefined && seed !== null && seed !== "") {
+      payload.seed = Number(seed)
+    }
+
+    return mediaRequest("ai-generate/", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    })
+  },
+
+  /**
+   * Edit an existing image media using Pollinations AI via Django backend
+   * Calls POST /api/media/{id}/ai-edit/
+   * @param {string|number} mediaId - Source media UUID or ID
+   * @param {Object} params - { prompt, seed }
+   * @returns {Promise<{image: string, source_media_id: string, prompt: string, model: string, content_type: string, width: number, height: number}>}
+   */
+  editAiImage: (mediaId, { prompt, seed }) => {
+    const payload = {
+      prompt: prompt?.trim(),
+    }
+    if (seed !== undefined && seed !== null && seed !== "") {
+      payload.seed = Number(seed)
+    }
+
+    return mediaRequest(`${encodeURIComponent(mediaId)}/ai-edit/`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    })
+  },
+
+  /**
+   * Voluntarily save an ephemeral AI preview image as a new Media in the user library
+   * Does NOT overwrite or alter the source image.
+   * @param {string} dataUrl - "data:image/jpeg;base64,..."
+   * @param {Object} metadata - { title, description }
+   * @returns {Promise<Object>} Created Media object
+   */
+  saveGeneratedImage: (
+    dataUrl,
+    { title = "Image générée par IA", description = "" } = {},
+  ) => {
+    const safeTitle = (title || "Image générée par IA").trim()
+    const file = dataUrlToFile(dataUrl, `ai_${Date.now()}.jpg`)
+    return mediaService.uploadMedia(file, safeTitle, "image", description || "")
+  },
+}
+
+/**
+ * Convert base64 data URL to a standard browser File object without extra dependencies.
+ * @param {string} dataUrl - e.g. "data:image/jpeg;base64,..."
+ * @param {string} filename - default filename
+ * @returns {File}
+ */
+export function dataUrlToFile(dataUrl, filename = "image-ia.jpg") {
+  if (!dataUrl || typeof dataUrl !== "string" || !dataUrl.includes(",")) {
+    throw new Error("Format de données d'image invalide (data URL attendue).")
+  }
+  const [header, b64Data] = dataUrl.split(",")
+  const mimeMatch = header.match(/:(.*?);/)
+  const mime = mimeMatch ? mimeMatch[1] : "image/jpeg"
+  const ext = mime.split("/")[1] || "jpg"
+  const cleanExt = ext === "jpeg" ? "jpg" : ext
+  const finalFilename = filename.includes(".")
+    ? filename
+    : `${filename}.${cleanExt}`
+
+  const byteString = atob(b64Data)
+  const u8arr = new Uint8Array(byteString.length)
+  for (let i = 0; i < byteString.length; i++) {
+    u8arr[i] = byteString.charCodeAt(i)
+  }
+  return new File([u8arr], finalFilename, { type: mime })
 }
 
 export default mediaService
